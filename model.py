@@ -137,13 +137,13 @@ class Codebook(nn.Module):
     x = x.view(batch_size, self.n_heads, embd_dim // self.n_heads)
 
     # calculate euclidean distance between x and each embedding
-    dist = torch.norm(x.unsqueeze(2) - self.embedding.weight, dim=2)
-    indices = torch.argmin(dist, dim=1).unsqueeze(1)  # shape = (batch_size, n_heads, 1)
+    dist = torch.norm(x.unsqueeze(-2) - self.embedding.weight, dim=-1)
+    indices = torch.argmin(dist, dim=-1).unsqueeze(-1)  # shape = (batch_size, n_heads, 1)
     # create ohe vector with indices == 1 and other == 0
     ohe = torch.zeros((batch_size, self.n_heads, self.num_embeddings), device=x.device)
-    ohe.scatter_(1, indices, 1)
+    ohe.scatter_(-1, indices, 1)
     ohe = ohe.unsqueeze(-1).expand(-1, -1, -1, self.embedding_dim)
-    out = (ohe * self.embedding.weight).sum(dim=2)
+    out = (ohe * self.embedding.weight).sum(dim=-2)
     # to let the grads flow
     out = x + out - x.detach()
 
