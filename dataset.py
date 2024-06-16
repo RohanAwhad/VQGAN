@@ -15,9 +15,9 @@ class Dataset:
     pass
 
 
-class MNISTDataset(Dataset):
+class DatasetLoaderLite(Dataset):
   def __init__(self, train: bool, root: str, batch_size: int, shuffle: bool):
-    self.ds = torchvision.datasets.MNIST(root=root, train=train, download=False)
+    self.ds = torchvision.datasets.CIFAR10(root=root, train=train, download=False)
     self.batch_size = batch_size
     self.indices = list(range(len(self.ds)))
     if shuffle: random.shuffle(self.indices)

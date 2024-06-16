@@ -2,7 +2,7 @@ import os
 import torch
 
 import engine
-from dataset import MNISTDataset
+from dataset import DatasetLoaderLite
 from model import Encoder, Generator, Discriminator, Codebook, VQGAN
 
 # ===
@@ -21,12 +21,12 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 # ===
 # Intialization
 # ===
-train_ds = MNISTDataset(train=True, root='data', batch_size=BATCH_SIZE, shuffle=True)
-test_ds = MNISTDataset(train=False, root='data', batch_size=BATCH_SIZE, shuffle=False)
+train_ds = DatasetLoaderLite(train=True, root='data', batch_size=BATCH_SIZE, shuffle=True)
+test_ds = DatasetLoaderLite(train=False, root='data', batch_size=BATCH_SIZE, shuffle=False)
 
 num_embeddings = 10
-input_dim = 28 * 28
-latent_dim = 64
+input_dim = 32*32*3
+latent_dim = 128
 n_heads = 8
 embed_dim = latent_dim // n_heads
 

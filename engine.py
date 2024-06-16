@@ -67,7 +67,7 @@ def run(train_ds, test_ds, vqgan, disc, vqgan_opt, disc_opt, N_STEPS, device):
       img, _ = vqgan(test_samples)
       vqgan.train()
       img = img.detach().cpu().numpy()
-      img = img.reshape(-1, 28, 28)
+      img = img.reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1)
       n_cols = int(math.sqrt(img.shape[0])) + 1
       fig, axs = plt.subplots(n_cols, n_cols)
       for j, ax in enumerate(axs.flatten()):
