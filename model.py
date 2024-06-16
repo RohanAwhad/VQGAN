@@ -123,24 +123,31 @@ class Discriminator(nn.Module):
 
 # codebook
 class Codebook(nn.Module):
-  def __init__(self, num_embeddings, embedding_dim):
+  def __init__(self, num_embeddings, embedding_dim, n_heads):
     super(Codebook, self).__init__()
     self.embedding = nn.Embedding(num_embeddings, embedding_dim)
     self.num_embeddings = num_embeddings
     self.embedding_dim = embedding_dim
+    self.n_heads = n_heads
 
   def forward(self, x):
-    batch_size = x.shape[0]
+    batch_size, embd_dim = x.shape
+
+    assert embd_dim % self.n_heads == 0, "embedding dim must be divisible by n_heads"
+    x = x.view(batch_size, self.n_heads, embd_dim // self.n_heads)
+
     # calculate euclidean distance between x and each embedding
-    dist = torch.norm(x.unsqueeze(1) - self.embedding.weight, dim=2)
-    indices = torch.argmin(dist, dim=1).unsqueeze(1)  # shape = (batch_size, 1)
+    dist = torch.norm(x.unsqueeze(2) - self.embedding.weight, dim=2)
+    indices = torch.argmin(dist, dim=1).unsqueeze(1)  # shape = (batch_size, n_heads, 1)
     # create ohe vector with indices == 1 and other == 0
-    ohe = torch.zeros((batch_size, self.num_embeddings), device=x.device)
+    ohe = torch.zeros((batch_size, self.n_heads, self.num_embeddings), device=x.device)
     ohe.scatter_(1, indices, 1)
-    ohe = ohe.unsqueeze(-1).expand(-1, -1, self.embedding_dim)
-    out = (ohe * self.embedding.weight).sum(dim=1)
+    ohe = ohe.unsqueeze(-1).expand(-1, -1, -1, self.embedding_dim)
+    out = (ohe * self.embedding.weight).sum(dim=2)
     # to let the grads flow
     out = x + out - x.detach()
+
+    out = out.view(batch_size, embd_dim)
     return out
 
 

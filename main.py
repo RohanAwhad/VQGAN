@@ -27,8 +27,10 @@ test_ds = MNISTDataset(train=False, root='data', batch_size=BATCH_SIZE, shuffle=
 num_embeddings = 10
 input_dim = 28 * 28
 latent_dim = 64
+n_heads = 8
+embed_dim = latent_dim // n_heads
 
-codebook = Codebook(num_embeddings=num_embeddings, embedding_dim=latent_dim)
+codebook = Codebook(num_embeddings=num_embeddings, embedding_dim=embed_dim, n_heads=n_heads)
 encoder = Encoder(input_dim, latent_dim)
 generator = Generator(latent_dim, input_dim)
 vqgan = VQGAN(encoder, codebook, generator)
