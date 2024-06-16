@@ -11,7 +11,10 @@ def run(train_ds, test_ds, vqgan, disc, vqgan_opt, disc_opt, N_STEPS, device):
   vqgan_opt.zero_grad()
   disc_opt.zero_grad()
 
-  test_samples = test_ds.next_batch().to(device)
+  test_samples = test_ds.next_batch()
+  test_images = test_samples['imgs'].to(device)
+  test_n_rows = test_samples['n_rows']
+  test_n_cols = test_samples['n_cols']
 
   print("Training for steps:", N_STEPS)
   vqgan.train()
@@ -20,7 +23,10 @@ def run(train_ds, test_ds, vqgan, disc, vqgan_opt, disc_opt, N_STEPS, device):
   start = time.monotonic()
   for i in range(N_STEPS):
 
-    batch = train_ds.next_batch().to(device)
+    batch = train_ds.next_batch()
+    images = batch['imgs'].to(device)
+    n_rows = batch['n_rows']
+    n_cols = batch['n_cols']
 
     # train discriminator
     for params in vqgan.parameters(): params.requires_grad = False
@@ -28,10 +34,10 @@ def run(train_ds, test_ds, vqgan, disc, vqgan_opt, disc_opt, N_STEPS, device):
 
     vqgan_opt.zero_grad()
     disc_opt.zero_grad()
-    real_img_disc_out = disc(batch).sigmoid()
+    real_img_disc_out = disc(images)
     
-    with torch.no_grad(): fake_imgs, _ = vqgan(batch)
-    fake_disc_out = disc(fake_imgs).sigmoid()
+    with torch.no_grad(): fake_imgs, _ = vqgan(images, n_rows=n_rows, n_cols=n_cols)
+    fake_disc_out = disc(fake_imgs)
 
     y_hat = torch.cat([real_img_disc_out, fake_disc_out])
     y_true = torch.cat([torch.ones_like(real_img_disc_out), torch.zeros_like(fake_disc_out)])
@@ -48,9 +54,9 @@ def run(train_ds, test_ds, vqgan, disc, vqgan_opt, disc_opt, N_STEPS, device):
     vqgan_opt.zero_grad()
     disc_opt.zero_grad()
     
-    fake_img, q_loss = vqgan(batch)
-    disc_out = disc(fake_img).sigmoid()
-    gen_loss = F.binary_cross_entropy(disc_out, torch.ones_like(disc_out)) + F.mse_loss(fake_img, batch) + q_loss
+    fake_img, q_loss = vqgan(images, n_rows=n_rows, n_cols=n_cols)
+    disc_out = disc(fake_img)
+    gen_loss = F.binary_cross_entropy(disc_out, torch.ones_like(disc_out)) + F.mse_loss(fake_img, images) + q_loss
     gen_loss.backward()
 
     vqgan_opt.step()
@@ -64,11 +70,11 @@ def run(train_ds, test_ds, vqgan, disc, vqgan_opt, disc_opt, N_STEPS, device):
     if i % 1000 == 0:
 
       vqgan.eval()
-      img, _ = vqgan(test_samples)
+      img, _ = vqgan(test_images, n_rows=test_n_rows, n_cols=test_n_cols)
       vqgan.train()
       img = img.detach().cpu().numpy()
       img = img.reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1)
-      n_cols = int(math.sqrt(img.shape[0])) + 1
+      _n_cols = int(math.sqrt(img.shape[0])) + 1
       fig, axs = plt.subplots(n_cols, n_cols)
       for j, ax in enumerate(axs.flatten()):
         if j < img.shape[0]:

@@ -1,9 +1,12 @@
+import dataclasses
 import os
 import torch
 
 import engine
 from dataset import DatasetLoaderLite
-from model import Encoder, Generator, Discriminator, Codebook, VQGAN
+from model import (Encoder, Generator, Discriminator, Codebook, VQGAN,
+  EncoderConfig, GeneratorConfig, DiscriminatorConfig, CodebookConfig
+)
 
 # ===
 # Constants
@@ -21,21 +24,52 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 # ===
 # Intialization
 # ===
-train_ds = DatasetLoaderLite(train=True, root='data', batch_size=BATCH_SIZE, shuffle=True)
-test_ds = DatasetLoaderLite(train=False, root='data', batch_size=BATCH_SIZE, shuffle=False)
+patch_size = 4
+train_ds = DatasetLoaderLite(train=True, root='data', batch_size=BATCH_SIZE, shuffle=True, patch_size=patch_size)
+test_ds = DatasetLoaderLite(train=False, root='data', batch_size=BATCH_SIZE, shuffle=False, patch_size=patch_size)
 
-num_embeddings = 10
-input_dim = 32*32*3
-latent_dim = 128
+num_embeddings = 128
+input_dim = patch_size * patch_size * 3
 n_heads = 8
-embed_dim = latent_dim // n_heads
+embed_dim = 128
 
-codebook = Codebook(num_embeddings=num_embeddings, embedding_dim=embed_dim, n_heads=n_heads)
-encoder = Encoder(input_dim, latent_dim)
-generator = Generator(latent_dim, input_dim)
+ENCODER_CONFIG = EncoderConfig(
+  input_dim=input_dim,
+  max_len=32,
+  n_hidden_layers=4,
+  n_hidden_dims=[embed_dim, embed_dim, embed_dim*2, embed_dim*2],
+  merge_after=2,
+  intermediate_scale=2,
+  n_heads=n_heads
+)
+GENERATOR_CONFIG = GeneratorConfig(
+  input_dim=input_dim,
+  max_len=32,
+  n_hidden_layers=4,
+  n_hidden_dims=[embed_dim*2, embed_dim*2, embed_dim, embed_dim],
+  merge_after=2,
+  intermediate_scale=2,
+  n_heads=n_heads
+)
+DISCRIMINATOR_CONFIG = DiscriminatorConfig(
+  input_dim=input_dim,
+  max_len=32,
+  n_hidden_layers=4,
+  embed_dim=embed_dim,
+  intermediate_scale=2,
+  n_heads=n_heads
+)
+CODEBOOK_CONFIG = CodebookConfig(
+  num_embeddings=num_embeddings,
+  embedding_dim=ENCODER_CONFIG.n_hidden_dims[-1],
+)
+
+codebook = Codebook(**dataclasses.asdict(CODEBOOK_CONFIG))
+encoder = Encoder(**dataclasses.asdict(ENCODER_CONFIG))
+generator = Generator(**dataclasses.asdict(GENERATOR_CONFIG))
 vqgan = VQGAN(encoder, codebook, generator)
 
-discriminator = Discriminator(input_dim)
+discriminator = Discriminator(**dataclasses.asdict(DISCRIMINATOR_CONFIG))
 
 vqgan_opt = torch.optim.AdamW(vqgan.parameters(), lr=GEN_LR)
 disc_opt = torch.optim.AdamW(discriminator.parameters(), lr=DISC_LR)
