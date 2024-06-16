@@ -1,3 +1,4 @@
+import os
 import torch
 
 import engine
@@ -10,13 +11,12 @@ from model import Encoder, Generator, Discriminator, Codebook, VQGAN
 GEN_LR = 3e-4
 DISC_LR = 3e-4
 BATCH_SIZE = 64
-N_EPOCHS = 100
-N_SAMPLES = 60_000
-N_STEPS = (N_SAMPLES // BATCH_SIZE) * N_EPOCHS
-# N_STEPS = 4000
+N_STEPS = 20000
 DEVICE = 'cpu'
 if torch.cuda.is_available(): DEVICE = 'cuda'
 if torch.backends.mps.is_available(): DEVICE = 'mps'
+MODEL_DIR = './models'
+os.makedirs(MODEL_DIR, exist_ok=True)
 
 # ===
 # Intialization
@@ -41,3 +41,12 @@ vqgan_opt = torch.optim.AdamW(vqgan.parameters(), lr=GEN_LR)
 disc_opt = torch.optim.AdamW(discriminator.parameters(), lr=DISC_LR)
 
 engine.run(train_ds, test_ds, vqgan, discriminator, vqgan_opt, disc_opt, N_STEPS, DEVICE)
+
+# save models
+codebook.to('cpu')
+encoder.to('cpu')
+generator.to('cpu')
+
+torch.save(codebook.state_dict(), os.path.join(MODEL_DIR, 'codebook.pth'))
+torch.save(encoder.state_dict(), os.path.join(MODEL_DIR, 'encoder.pth'))
+torch.save(generator.state_dict(), os.path.join(MODEL_DIR, 'generator.pth'))
