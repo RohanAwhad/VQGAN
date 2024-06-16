@@ -2,7 +2,7 @@ import torch
 
 import engine
 from dataset import MNISTDataset
-from model import Encoder, Generator, Discriminator
+from model import Encoder, Generator, Discriminator, Codebook, VQGAN
 
 # ===
 # Constants
@@ -24,14 +24,18 @@ if torch.backends.mps.is_available(): DEVICE = 'mps'
 train_ds = MNISTDataset(train=True, root='data', batch_size=BATCH_SIZE, shuffle=True)
 test_ds = MNISTDataset(train=False, root='data', batch_size=BATCH_SIZE, shuffle=False)
 
+num_embeddings = 10
 input_dim = 28 * 28
 latent_dim = 64
 
+codebook = Codebook(num_embeddings=num_embeddings, embedding_dim=latent_dim)
 encoder = Encoder(input_dim, latent_dim)
 generator = Generator(latent_dim, input_dim)
+vqgan = VQGAN(encoder, codebook, generator)
+
 discriminator = Discriminator(input_dim)
 
-enc_gen_opt = torch.optim.AdamW(list(encoder.parameters()) + list(generator.parameters()), lr=GEN_LR)
+vqgan_opt = torch.optim.AdamW(vqgan.parameters(), lr=GEN_LR)
 disc_opt = torch.optim.AdamW(discriminator.parameters(), lr=DISC_LR)
 
-engine.run(train_ds, test_ds, encoder, generator, discriminator, enc_gen_opt, disc_opt, N_STEPS, DEVICE)
+engine.run(train_ds, test_ds, vqgan, discriminator, vqgan_opt, disc_opt, N_STEPS, DEVICE)

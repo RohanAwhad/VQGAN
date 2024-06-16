@@ -132,14 +132,33 @@ class Codebook(nn.Module):
   def forward(self, x):
     batch_size = x.shape[0]
     # calculate euclidean distance between x and each embedding
-    x = x.unsqueeze(1)
-    dist = torch.norm(x - self.embedding.weight, dim=2)
+    dist = torch.norm(x.unsqueeze(1) - self.embedding.weight, dim=2)
     indices = torch.argmin(dist, dim=1).unsqueeze(1)  # shape = (batch_size, 1)
     # create ohe vector with indices == 1 and other == 0
-    ohe = torch.zeros((batch_size, self.num_embeddings))
+    ohe = torch.zeros((batch_size, self.num_embeddings), device=x.device)
     ohe.scatter_(1, indices, 1)
     ohe = ohe.unsqueeze(-1).expand(-1, -1, self.embedding_dim)
     out = (ohe * self.embedding.weight).sum(dim=1)
     # to let the grads flow
     out = x + out - x.detach()
     return out
+
+
+# compiling the enc-codebook-gen models into a single model
+class VQGAN(nn.Module):
+  def __init__(self, encoder, codebook, generator):
+    super(VQGAN, self).__init__()
+    self.encoder = encoder
+    self.codebook = codebook
+    self.generator = generator
+
+  def forward(self, inp):
+    enc_inp = self.encoder(inp)
+    tok_inp = self.codebook(enc_inp)
+    fake_img = self.generator(tok_inp)
+
+    # loss calculation
+    sg_enc_inp = enc_inp.detach()
+    sg_tok_inp = tok_inp.detach()
+    loss = torch.norm(sg_enc_inp - tok_inp) + torch.norm(sg_tok_inp - enc_inp)
+    return fake_img, loss
