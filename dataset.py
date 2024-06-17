@@ -1,6 +1,7 @@
 import random
 import torch
 import torchvision
+import torch.nn as nn
 
 from abc import ABC, abstractmethod
 from torchvision.transforms import ToTensor
@@ -17,12 +18,13 @@ class Dataset:
 
 class DatasetLoaderLite(Dataset):
   def __init__(self, train: bool, root: str, batch_size: int, shuffle: bool, patch_size: int):
-    self.ds = torchvision.datasets.CIFAR10(root=root, train=train, download=False)
+    self.ds = torchvision.datasets.MNIST(root=root, train=train, download=False)
     self.batch_size = batch_size
     self.indices = list(range(len(self.ds)))
     if shuffle: random.shuffle(self.indices)
 
     self.to_tensor = ToTensor()
+    self.pad = nn.ZeroPad2d(2)  # to convert 28x28 MNIST to 32x32
     self.patch_size = patch_size
     self.reset()
 
@@ -38,6 +40,7 @@ class DatasetLoaderLite(Dataset):
     for idx in next_indices:
       img, _ = self.ds[idx]
       img_tensor = self.to_tensor(img)
+      img_tensor = self.pad(img_tensor)
       n_channels, n_rows, n_cols = img_tensor.size()
       img_tensor = img_tensor.view(n_channels, n_rows//self.patch_size, self.patch_size, n_cols//self.patch_size, self.patch_size)
       img_tensor = img_tensor.permute(1, 3, 0, 2, 4).flatten(2)
