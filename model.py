@@ -1,201 +1,187 @@
-import dataclasses
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-@dataclasses.dataclass
-class EncoderConfig:
-  input_dim: int
-  output_dim: int
-  max_len: int
-  n_hidden_layers: int
-  n_hidden_dims: list
-  merge_after: int
-  intermediate_scale: int
-  n_heads: int
-  dropout_rate: float
 
-@dataclasses.dataclass
-class GeneratorConfig:
-  input_dim: int
-  output_dim: int
-  max_len: int
-  n_hidden_layers: int
-  n_hidden_dims: list
-  merge_after: int
-  intermediate_scale: int
-  n_heads: int
-  dropout_rate: float
-
-@dataclasses.dataclass
-class DiscriminatorConfig:
-  input_dim: int
-  max_len: int
-  n_hidden_layers: int
-  embed_dim: int
-  intermediate_scale: int
-  n_heads: int
-  dropout_rate: float
-
-@dataclasses.dataclass
-class CodebookConfig:
-  num_embeddings: int
-  embedding_dim: int
-
-# TODO (rohan): add dropouts
-
-class AttentionBlock(nn.Module):
-  def __init__(self, embed_dim, n_heads):
+# ===
+# Encoder
+# ===
+class ConvBlock(nn.Module):
+  def __init__(self, in_channels, out_channels, kernel_size, stride, padding, apply_act=True):
     super().__init__()
-    assert embed_dim % n_heads == 0, "Embedding dimension must be divisible by number of heads"
-    self.embed_dim = embed_dim
-    self.n_heads = n_heads
-    self.head_dim = embed_dim // n_heads
-    self.q = nn.Linear(embed_dim, embed_dim, bias=True)
-    self.k = nn.Linear(embed_dim, embed_dim, bias=True)
-    self.v = nn.Linear(embed_dim, embed_dim, bias=True)
-    self.out = nn.Linear(embed_dim, embed_dim, bias=True)
+    self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding)
+    self.bn = nn.BatchNorm2d(out_channels)
+    self.apply_act = apply_act
+    if self.apply_act: self.act = nn.ReLU()
 
   def forward(self, x):
-    batch_size = x.size(0)
-    q = self.q(x).view(batch_size, -1, self.n_heads, self.head_dim).permute(0, 2, 1, 3)
-    k = self.k(x).view(batch_size, -1, self.n_heads, self.head_dim).permute(0, 2, 1, 3)
-    v = self.v(x).view(batch_size, -1, self.n_heads, self.head_dim).permute(0, 2, 1, 3)
-
-    attn = torch.einsum('bhid,bhjd->bhij', q, k) / self.head_dim**0.5
-    attn = F.softmax(attn, dim=-1)
-    x = torch.einsum('bhij,bhjd->bhid', attn, v).permute(0, 2, 1, 3).reshape(batch_size, -1, self.embed_dim)
-    x = self.out(x)
+    x = self.bn(self.conv(x))
+    if self.apply_act: x = self.act(x)
     return x
 
-class MLP(nn.Module):
-  def __init__(self, embed_dim, intermediate_dim):
+class ResBlock(nn.Module):
+  def __init__(self, in_channels, out_channels, downsample=False):
     super().__init__()
-    self.fc1 = nn.Linear(embed_dim, intermediate_dim)
-    self.fc2 = nn.Linear(intermediate_dim, embed_dim)
+
+    self.stride = 2 if downsample else 1
+    self.conv_blocks = nn.Sequential(
+      ConvBlock(in_channels, out_channels, kernel_size=1, stride=1, padding=0),
+      ConvBlock(out_channels, out_channels, kernel_size=3, stride=self.stride, padding=1),
+      ConvBlock(out_channels, 4*out_channels, kernel_size=1, stride=1, padding=0, apply_act=False),  # expansion block,
+    )
+    self.shortcut = ConvBlock(in_channels, 4*out_channels, kernel_size=1, stride=self.stride, padding=0, apply_act=False)
+    self.act = nn.ReLU()
 
   def forward(self, x):
-    return self.fc2(F.gelu(self.fc1(x)))
-
-class EncoderBlock(nn.Module):
-  def __init__(self, embed_dim, intermediate_dim, n_heads, dropout_rate):
-    super().__init__()
-    self.attn_block = AttentionBlock(embed_dim, n_heads)
-    self.mlp = MLP(embed_dim, intermediate_dim)
-    self.ln1 = nn.LayerNorm(embed_dim)
-    self.ln2 = nn.LayerNorm(embed_dim)
-    self.dropout = nn.Dropout(dropout_rate)
-
-  def forward(self, x):
-    x = x + self.dropout(self.attn_block(self.ln1(x)))
-    x = x + self.dropout(self.mlp(self.ln2(x)))
+    conv_out = self.conv_blocks(x)
+    shortcut_out = self.shortcut(x)
+    x = self.act(conv_out + shortcut_out)
     return x
-
-class PatchMerge(nn.Module):
-  def __init__(self):
-    super().__init__()
-
-  def forward(self, x, n_rows, n_cols):
-    batch_size, n_patches, embed_dim = x.size()
-    x = x.view(batch_size, n_rows, n_cols, embed_dim)
-    tl = x[:, ::2, ::2, :].unsqueeze(-2)
-    tr = x[:, ::2, 1::2, :].unsqueeze(-2)
-    bl = x[:, 1::2, ::2, :].unsqueeze(-2)
-    br = x[:, 1::2, 1::2, :].unsqueeze(-2)
-    x = torch.cat([tl, tr, bl, br], dim=-2).mean(dim=-2).flatten(1, 2)
-    return x, n_rows//2, n_cols//2
-
-
 
 class Encoder(nn.Module):
-  def __init__(self, input_dim, output_dim, max_len, n_hidden_layers, n_hidden_dims, merge_after, intermediate_scale, n_heads, dropout_rate):
-    super().__init__()
-
-    self.patch_embedder = nn.Linear(input_dim, n_hidden_dims[0], bias=False)
-    self.position_embedder = nn.Embedding(max_len, n_hidden_dims[0])
-    self.blocks = nn.ModuleList([])
-    for i in range(n_hidden_layers):
-      self.blocks.append(EncoderBlock(n_hidden_dims[i], int(n_hidden_dims[i]*intermediate_scale), n_heads, dropout_rate))
-      if (i+1) % merge_after == 0 and (i+1) != n_hidden_layers:
-        self.blocks.append(PatchMerge())
-
-    self.out = nn.Linear(n_hidden_dims[-1], output_dim)
-
-  def forward(self, x, n_rows, n_cols):
-    patch_embeddings = self.patch_embedder(x)
-    pos_embeddings = self.position_embedder(torch.arange(x.size(1), device=x.device))
-    x = patch_embeddings + pos_embeddings
-    for block in self.blocks:
-      if block._get_name() == 'PatchMerge':
-        x, n_rows, n_cols = block(x, n_rows, n_cols)
-      else:
-        x = block(x)
-
-    x = F.gelu(self.out(x))
-    return x, n_rows, n_cols
-
-
-class PatchUnMerge(nn.Module):
   def __init__(self):
     super().__init__()
 
-  def forward(self, x, n_rows, n_cols):
-    batch_size, n_patches, embed_dim = x.size()
-    x = x.view(batch_size, n_rows, n_cols, embed_dim).permute(0, 3, 1, 2)
-    x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
-    x = x.permute(0, 2, 3, 1).flatten(1, 2)
-    return x, n_rows*2, n_cols*2
-    
-
-class Generator(nn.Module):
-  def __init__(self, input_dim, output_dim, max_len, n_hidden_layers, n_hidden_dims, merge_after, intermediate_scale, n_heads, dropout_rate):
-    super().__init__()
-
-    self.patch_embedder = nn.Linear(input_dim, n_hidden_dims[0], bias=False)
-    self.position_embedder = nn.Embedding(max_len, n_hidden_dims[0])
-
-    self.blocks = nn.ModuleList([])
-    for i in range(n_hidden_layers):
-      self.blocks.append(EncoderBlock(n_hidden_dims[i], int(n_hidden_dims[i]*intermediate_scale), n_heads, dropout_rate))
-      if (i+1) % merge_after == 0 and (i+1) != n_hidden_layers:
-        self.blocks.append(PatchUnMerge())
-    self.fc = nn.Linear(n_hidden_dims[-1], output_dim)
-
-  def forward(self, x, n_rows, n_cols):
-    patch_embeddings = self.patch_embedder(x)
-    pos_embeddings = self.position_embedder(torch.arange(x.size(1), device=x.device))
-    x = patch_embeddings + pos_embeddings
-    for block in self.blocks:
-      if block._get_name() == 'PatchUnMerge':
-        x, n_rows, n_cols = block(x, n_rows, n_cols)
-      else:
-        x = block(x)
-    x = self.fc(x).sigmoid()
-    return x, n_rows, n_cols
-
-
-class Discriminator(nn.Module):
-  def __init__(self, input_dim, max_len, n_hidden_layers, embed_dim, intermediate_scale, n_heads, dropout_rate):
-    super().__init__()
-
-    self.patch_embedder = nn.Linear(input_dim, embed_dim, bias=False)
-    self.position_embedder = nn.Embedding(max_len, embed_dim)
-    self.blocks = nn.ModuleList([])
-    for i in range(n_hidden_layers):
-      self.blocks.append(EncoderBlock(embed_dim, int(embed_dim*intermediate_scale), n_heads, dropout_rate))
-
-    self.out = nn.Linear(embed_dim, 1)
+    self.conv1 = ConvBlock(in_channels=3, out_channels=64, kernel_size=7, stride=2, padding=2)
+    self.pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+    self.conv2 = nn.Sequential(
+      ResBlock(in_channels=64, out_channels=64),
+      ResBlock(in_channels=256, out_channels=64),
+      ResBlock(in_channels=256, out_channels=64),
+    )
+    self.conv3 = nn.Sequential(
+      ResBlock(in_channels=256, out_channels=128, downsample=True),
+      ResBlock(in_channels=512, out_channels=128),
+      ResBlock(in_channels=512, out_channels=128),
+      ResBlock(in_channels=512, out_channels=128),
+    )
+    self.conv4 = nn.Sequential(
+      ResBlock(in_channels=512, out_channels=256, downsample=True),
+      ResBlock(in_channels=1024, out_channels=256),
+      ResBlock(in_channels=1024, out_channels=256),
+      ResBlock(in_channels=1024, out_channels=256),
+      ResBlock(in_channels=1024, out_channels=256),
+      ResBlock(in_channels=1024, out_channels=256),
+    )
+    self.conv5 = nn.Sequential(
+      ResBlock(in_channels=1024, out_channels=512, downsample=True),
+      ResBlock(in_channels=2048, out_channels=512),
+      ResBlock(in_channels=2048, out_channels=512),
+    )
 
   def forward(self, x):
-    x = self.patch_embedder(x)
-    x += self.position_embedder(torch.arange(x.size(1), device=x.device))
-    for block in self.blocks:
-      x = block(x)
-    x = self.out(x).sigmoid()
+    x = self.conv1(x)
+    x = self.pool(x)
+    x = self.conv2(x)
+    x = self.conv3(x)
+    x = self.conv4(x)
+    x = self.conv5(x)
+
     return x
-    
+
+# ===
+# Generator model
+# ===
+class DeconvBlock(nn.Module):
+  def __init__(self, in_channels, out_channels, kernel_size, stride, padding, output_padding, apply_act=True):
+    super().__init__()
+    self.deconv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride, padding, output_padding=output_padding)
+    self.bn = nn.BatchNorm2d(out_channels)
+    self.apply_act = apply_act
+    if self.apply_act:
+        self.act = nn.ReLU()
+
+  def forward(self, x):
+    print('  DeconvBlock inp shape:', x.shape)
+    x = self.bn(self.deconv(x))
+    print('  DeconvBlock out shape:', x.shape)
+    if self.apply_act: x = self.act(x)
+    return x
 
 
+class UpResBlock(nn.Module):
+  def __init__(self, in_channels, out_channels, upsample=False):
+    super().__init__()
+
+    self.stride = 2 if upsample else 1
+    self.deconv_blocks = nn.Sequential(
+      DeconvBlock(in_channels, out_channels, kernel_size=1, stride=1, padding=0, output_padding=0),
+      DeconvBlock(out_channels, out_channels, kernel_size=3, stride=self.stride, padding=1, output_padding=1 if upsample else 0),
+      DeconvBlock(out_channels, out_channels, kernel_size=1, stride=1, padding=0, output_padding=0, apply_act=False),  # contraction block
+    )
+    self.shortcut = DeconvBlock(in_channels, out_channels, kernel_size=1, stride=self.stride, padding=0, output_padding=1 if upsample else 0, apply_act=False)
+    self.act = nn.ReLU()
+
+  def forward(self, x):
+    print('UpResBlock inp shape:', x.shape)
+    deconv_out = self.deconv_blocks(x)
+    print('UpResBlock deconv_out shape:', deconv_out.shape)
+    shortcut_out = self.shortcut(x)
+    print('UpResBlock shortcut_out shape:', shortcut_out.shape)
+    x = self.act(deconv_out + shortcut_out)
+    print('UpResBlock out shape:', x.shape)
+    return x
+
+
+class Generator(nn.Module):
+  def __init__(self):
+    super().__init__()
+
+    self.deconv5 = nn.Sequential(
+      UpResBlock(in_channels=2048, out_channels=512),
+      UpResBlock(in_channels=512, out_channels=512),
+      UpResBlock(in_channels=512, out_channels=512, upsample=True),
+    )
+    self.deconv4 = nn.Sequential(
+      UpResBlock(in_channels=512, out_channels=256),
+      UpResBlock(in_channels=256, out_channels=256),
+      UpResBlock(in_channels=256, out_channels=256),
+      UpResBlock(in_channels=256, out_channels=256),
+      UpResBlock(in_channels=256, out_channels=256),
+      UpResBlock(in_channels=256, out_channels=256, upsample=True),
+    )
+    self.deconv3 = nn.Sequential(
+      UpResBlock(in_channels=256, out_channels=128),
+      UpResBlock(in_channels=128, out_channels=128),
+      UpResBlock(in_channels=128, out_channels=128),
+      UpResBlock(in_channels=128, out_channels=128, upsample=True),
+    )
+    self.deconv2 = nn.Sequential(
+      UpResBlock(in_channels=128, out_channels=64),
+      UpResBlock(in_channels=64, out_channels=64),
+      UpResBlock(in_channels=64, out_channels=64, upsample=True),
+    )
+    self.deconv1 = DeconvBlock(in_channels=64, out_channels=3, kernel_size=7, stride=2, padding=3, output_padding=1, apply_act=False)
+    self.act = nn.Sigmoid()
+
+  def forward(self, x):
+    x = self.deconv5(x)
+    x = self.deconv4(x)
+    x = self.deconv3(x)
+    x = self.deconv2(x)
+    x = self.deconv1(x)
+    x = self.act(x)
+    return x
+
+# ===
+# Discriminator model
+# ===
+class Discriminator(nn.Module):
+  def __init__(self):
+    super().__init__()
+
+    self.encoder = Encoder()
+    self.fc = nn.Linear(2048, 1)
+  
+  def forward(self, x):
+    x = self.encoder(x)
+    x = self.fc(x.permute(0, 2, 3, 1)).sigmoid()
+    return x
+
+
+# ===
+# Codebook
+# ===
 class Codebook(nn.Module):
   def __init__(self, num_embeddings, embedding_dim):
     super().__init__()
@@ -205,8 +191,9 @@ class Codebook(nn.Module):
     self.embedding.weight.data.uniform_(-1/num_embeddings, 1/num_embeddings)
 
   def forward(self, x):
-    batch_size, seq_len, embd_dim = x.shape
-    x = x.flatten(0, 1).contiguous()
+    batch_size, embed_dim, n_rows, n_cols = x.shape
+    x = x.permute(0, 2, 3, 1).contiguous()
+    x = x.flatten(0, 2).contiguous()
 
 
     a = torch.sum(x**2, dim=1, keepdim=True)
@@ -220,7 +207,7 @@ class Codebook(nn.Module):
     loss = torch.mean((x.detach() - q)**2) + 0.5*torch.mean((x - q.detach())**2)
 
     out = x + (q - x).detach()
-    out = out.view(batch_size, seq_len, embd_dim)
+    out = out.view(batch_size, n_rows, n_cols, embed_dim).permute(0, 3, 1, 2).contiguous()
     return out, loss
 
 
@@ -236,12 +223,5 @@ class VQGAN(nn.Module):
     enc_inp, n_rows, n_cols = self.encoder(inp, n_rows, n_cols)
     tok_inp, loss = self.codebook(enc_inp)
     fake_img, n_rows, n_cols = self.generator(tok_inp, n_rows, n_cols)
-
-
-    # for x in range(fake_img.shape[1]):
-    #   print('  ', x, ':', torch.all(torch.eq(fake_img[0, x, :], fake_img[:, x, :])))
-
-    # print('fake_img:', fake_img.shape)
-
 
     return fake_img, loss
