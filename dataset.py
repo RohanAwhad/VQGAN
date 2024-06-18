@@ -1,32 +1,16 @@
 import random
 import torch
 import torchvision
-import torch.nn as nn
-import torch.nn.functional as F
-
-from abc import ABC, abstractmethod
 from torchvision.transforms import ToTensor
 
-class Dataset:
-  @abstractmethod
-  def next_batch(self):
-    pass
-
-  @abstractmethod
-  def reset(self):
-    pass
-
-
-class DatasetLoaderLite(Dataset):
-  def __init__(self, train: bool, root: str, batch_size: int, shuffle: bool, patch_size: int):
+class DatasetLoaderLite:
+  def __init__(self, train: bool, root: str, batch_size: int, shuffle: bool):
     self.ds = torchvision.datasets.CIFAR10(root=root, train=train, download=False)
     self.batch_size = batch_size
     self.indices = list(range(len(self.ds)))
     if shuffle: random.shuffle(self.indices)
 
     self.to_tensor = ToTensor()
-    self.pad = nn.ZeroPad2d(2)  # to convert 28x28 MNIST to 32x32
-    self.patch_size = patch_size
     self.reset()
 
   def reset(self):
@@ -42,6 +26,4 @@ class DatasetLoaderLite(Dataset):
       img_tensor = self.to_tensor(img)
       imgs.append(img_tensor)
 
-    return {
-      'images': torch.stack(imgs),
-    }
+    return {'images': torch.stack(imgs)}

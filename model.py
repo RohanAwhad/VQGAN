@@ -182,7 +182,7 @@ class Codebook(nn.Module):
 
     out = x + (q - x).detach()
     out = out.view(batch_size, n_rows, n_cols, embed_dim).permute(0, 3, 1, 2).contiguous()
-    return out, loss
+    return out, indices, loss
 
 
 # compiling the enc-codebook-gen models into a single model
@@ -195,7 +195,7 @@ class VQGAN(nn.Module):
 
   def forward(self, inp):
     enc_inp = self.encoder(inp)
-    tok_inp, loss = self.codebook(enc_inp)
+    tok_inp, indices, loss = self.codebook(enc_inp)
     fake_img = self.generator(tok_inp)
 
-    return fake_img, loss
+    return fake_img, indices, loss
