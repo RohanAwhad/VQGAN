@@ -1,10 +1,9 @@
 import os
 import torch
 
-import engine
+import engine, logger
 from dataset import DatasetLoaderLite
 from model import Encoder, Generator, Discriminator, Codebook, VQGAN
-from logger import WandbLogger
 
 # ===
 # Constants
@@ -21,15 +20,16 @@ if torch.backends.mps.is_available(): DEVICE = 'mps'
 MODEL_DIR = './models'
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-LOGGER = WandbLogger(project_name='vqgan', run_name='test-mnist')
+LOGGER = logger.ConsoleLogger(project_name='vqgan', run_name='test-mnist')
 
 # ===
 # Intialization
 # ===
-train_ds = DatasetLoaderLite(train=True, root='data', batch_size=BATCH_SIZE, shuffle=True)
-test_ds = DatasetLoaderLite(train=False, root='data', batch_size=BATCH_SIZE, shuffle=False)
+DATA_DIR = "/Users/rohan/3_Resources/ai_datasets/caltech_101/caltech101/101_ObjectCategories"
+train_ds = DatasetLoaderLite(root=DATA_DIR, batch_size=BATCH_SIZE, shuffle=True)
+test_ds = DatasetLoaderLite(root=DATA_DIR, batch_size=BATCH_SIZE, shuffle=False)
 
-codebook = Codebook(num_embeddings=4, embedding_dim=128)
+codebook = Codebook(num_embeddings=64, embedding_dim=2048)
 encoder = Encoder()
 generator = Generator()
 discriminator = Discriminator()

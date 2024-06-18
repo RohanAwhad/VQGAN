@@ -44,19 +44,47 @@ class Encoder(nn.Module):
     super().__init__()
     dropout_rate = 0.2
 
-    self.conv1 = ConvBlock(in_channels=3, out_channels=16, kernel_size=7, stride=1, padding=3)
+    self.conv1 = ConvBlock(in_channels=3, out_channels=64, kernel_size=7, stride=2, padding=3)
     self.pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
     self.conv2 = nn.Sequential(
-      ResBlock(in_channels=16, out_channels=16),
+      ResBlock(in_channels=64, out_channels=64),
       nn.Dropout2d(p=dropout_rate),
-      ResBlock(in_channels=64, out_channels=16),
+      ResBlock(in_channels=256, out_channels=64),
       nn.Dropout2d(p=dropout_rate),
+      ResBlock(in_channels=256, out_channels=64),
     )
     self.conv3 = nn.Sequential(
-      ResBlock(in_channels=64, out_channels=32, downsample=True),
+      ResBlock(in_channels=256, out_channels=128, downsample=True),
       nn.Dropout2d(p=dropout_rate),
-      ResBlock(in_channels=128, out_channels=32),
+      ResBlock(in_channels=512, out_channels=128),
+      nn.Dropout2d(p=dropout_rate),
+      ResBlock(in_channels=512, out_channels=128),
+      nn.Dropout2d(p=dropout_rate),
+      ResBlock(in_channels=512, out_channels=128),
+      nn.Dropout2d(p=dropout_rate),
+      ResBlock(in_channels=512, out_channels=128),
     )
+    self.conv4 = nn.Sequential(
+      ResBlock(in_channels=512, out_channels=256, downsample=True),
+      nn.Dropout2d(p=dropout_rate),
+      ResBlock(in_channels=1024, out_channels=256),
+      nn.Dropout2d(p=dropout_rate),
+      ResBlock(in_channels=1024, out_channels=256),
+      nn.Dropout2d(p=dropout_rate),
+      ResBlock(in_channels=1024, out_channels=256),
+      nn.Dropout2d(p=dropout_rate),
+      ResBlock(in_channels=1024, out_channels=256),
+      nn.Dropout2d(p=dropout_rate),
+      ResBlock(in_channels=1024, out_channels=256),
+    )
+    self.conv5 = nn.Sequential(
+      ResBlock(in_channels=1024, out_channels=512, downsample=True),
+      nn.Dropout2d(p=dropout_rate),
+      ResBlock(in_channels=2048, out_channels=512),
+      nn.Dropout2d(p=dropout_rate),
+      ResBlock(in_channels=2048, out_channels=512),
+    )
+
 
 
   def forward(self, x):
@@ -64,6 +92,8 @@ class Encoder(nn.Module):
     x = self.pool(x)
     x = self.conv2(x)
     x = self.conv3(x)
+    x = self.conv4(x)
+    x = self.conv5(x)
     return x
 
 # ===
@@ -109,28 +139,52 @@ class Generator(nn.Module):
     super().__init__()
 
     dropout_rate = 0.2
+    self.deconv5 = nn.Sequential(
+      UpResBlock(in_channels=2048, out_channels=512),
+      nn.Dropout2d(p=dropout_rate),
+      UpResBlock(in_channels=2048, out_channels=512),
+      nn.Dropout2d(p=dropout_rate),
+      UpResBlock(in_channels=2048, out_channels=256, upsample=True),
+    )
+
+    self.deconv4 = nn.Sequential(
+      UpResBlock(in_channels=1024, out_channels=256),
+      nn.Dropout2d(p=dropout_rate),
+      UpResBlock(in_channels=1024, out_channels=256),
+      nn.Dropout2d(p=dropout_rate),
+      UpResBlock(in_channels=1024, out_channels=256),
+      nn.Dropout2d(p=dropout_rate),
+      UpResBlock(in_channels=1024, out_channels=256),
+      nn.Dropout2d(p=dropout_rate),
+      UpResBlock(in_channels=1024, out_channels=256),
+      nn.Dropout2d(p=dropout_rate),
+      UpResBlock(in_channels=1024, out_channels=128, upsample=True),
+    )
 
     self.deconv3 = nn.Sequential(
-      UpResBlock(in_channels=128, out_channels=32),
+      UpResBlock(in_channels=512, out_channels=128),
       nn.Dropout2d(p=dropout_rate),
-      UpResBlock(in_channels=128, out_channels=32, upsample=True),
+      UpResBlock(in_channels=512, out_channels=128),
+      nn.Dropout2d(p=dropout_rate),
+      UpResBlock(in_channels=512, out_channels=64, upsample=True),
       nn.Dropout2d(p=dropout_rate),
     )
     self.deconv2 = nn.Sequential(
-      UpResBlock(in_channels=128, out_channels=16),
+      UpResBlock(in_channels=256, out_channels=64),
       nn.Dropout2d(p=dropout_rate),
-      UpResBlock(in_channels=64, out_channels=16),
+      UpResBlock(in_channels=256, out_channels=64),
       nn.Dropout2d(p=dropout_rate),
+      UpResBlock(in_channels=256, out_channels=16),
     )
-    self.deconv1 = DeconvBlock(in_channels=64, out_channels=16, kernel_size=7, stride=2, padding=3, output_padding=1)
-    self.last_layer = nn.Conv2d(in_channels=16, out_channels=3, kernel_size=3, stride=1, padding=1)
+    self.deconv1 = nn.ConvTranspose2d(in_channels=64, out_channels=3, kernel_size=7, stride=2, padding=3, output_padding=1)
     self.act = nn.Sigmoid()
 
   def forward(self, x):
+    x = self.deconv5(x)
+    x = self.deconv4(x)
     x = self.deconv3(x)
     x = self.deconv2(x)
     x = self.deconv1(x)
-    x = self.last_layer(x)
     x = self.act(x)
     return x
 
@@ -144,7 +198,7 @@ class Discriminator(nn.Module):
     dropout_rate = 0.2
     self.encoder = Encoder()
     self.dropout = nn.Dropout2d(p=dropout_rate)
-    self.fc = nn.Linear(128, 1)
+    self.fc = nn.Linear(2048, 1)
   
   def forward(self, x):
     x = self.encoder(x)

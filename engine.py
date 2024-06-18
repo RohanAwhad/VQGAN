@@ -33,7 +33,7 @@ def run(train_ds, test_ds, vqgan, disc, vqgan_opt, disc_opt, N_STEPS, device, lo
 
     reconstruction_loss = ((fake_img - images) ** 2).mean()
     gan_loss = F.binary_cross_entropy(disc_out, torch.zeros_like(disc_out))
-    lambda_ = calculate_lambda(reconstruction_loss, gan_loss, vqgan.generator.last_layer)
+    lambda_ = calculate_lambda(reconstruction_loss, gan_loss, vqgan.generator.deconv1)
     gen_loss = lambda_ * gan_loss + reconstruction_loss + commitment_loss
 
     vqgan_opt.zero_grad()
@@ -78,8 +78,8 @@ def run(train_ds, test_ds, vqgan, disc, vqgan_opt, disc_opt, N_STEPS, device, lo
       batch_size, n_channels, img_h, img_w = img.shape
       _n_cols = int(math.sqrt(batch_size)) + 1
 
-      img = img.permute(0, 2, 3, 1).detach().cpu().numpy()
-      resized_test_images = test_images.permute(0, 2, 3, 1).detach().cpu().numpy()
+      img = F.interpolate(img, (32, 32)).permute(0, 2, 3, 1).detach().cpu().numpy()
+      resized_test_images = F.interpolate(test_images, (32, 32)).permute(0, 2, 3, 1).detach().cpu().numpy()
 
       fig, axs = plt.subplots(_n_cols * 2, _n_cols)
       for a in range(_n_cols * 2):
