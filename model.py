@@ -42,15 +42,19 @@ class ResBlock(nn.Module):
 class Encoder(nn.Module):
   def __init__(self):
     super().__init__()
+    dropout_rate = 0.2
 
-    self.conv1 = ConvBlock(in_channels=1, out_channels=16, kernel_size=7, stride=1, padding=3)
+    self.conv1 = ConvBlock(in_channels=3, out_channels=16, kernel_size=7, stride=1, padding=3)
     self.pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
     self.conv2 = nn.Sequential(
       ResBlock(in_channels=16, out_channels=16),
+      nn.Dropout2d(p=dropout_rate),
       ResBlock(in_channels=64, out_channels=16),
+      nn.Dropout2d(p=dropout_rate),
     )
     self.conv3 = nn.Sequential(
       ResBlock(in_channels=64, out_channels=32, downsample=True),
+      nn.Dropout2d(p=dropout_rate),
       ResBlock(in_channels=128, out_channels=32),
     )
 
@@ -104,21 +108,29 @@ class Generator(nn.Module):
   def __init__(self):
     super().__init__()
 
+    dropout_rate = 0.2
+
     self.deconv3 = nn.Sequential(
       UpResBlock(in_channels=128, out_channels=32),
+      nn.Dropout2d(p=dropout_rate),
       UpResBlock(in_channels=128, out_channels=32, upsample=True),
+      nn.Dropout2d(p=dropout_rate),
     )
     self.deconv2 = nn.Sequential(
       UpResBlock(in_channels=128, out_channels=16),
+      nn.Dropout2d(p=dropout_rate),
       UpResBlock(in_channels=64, out_channels=16),
+      nn.Dropout2d(p=dropout_rate),
     )
-    self.deconv1 = DeconvBlock(in_channels=64, out_channels=1, kernel_size=7, stride=2, padding=3, output_padding=1, apply_act=False)
+    self.deconv1 = DeconvBlock(in_channels=64, out_channels=16, kernel_size=7, stride=2, padding=3, output_padding=1)
+    self.last_layer = nn.Conv2d(in_channels=16, out_channels=3, kernel_size=3, stride=1, padding=1)
     self.act = nn.Sigmoid()
 
   def forward(self, x):
     x = self.deconv3(x)
     x = self.deconv2(x)
     x = self.deconv1(x)
+    x = self.last_layer(x)
     x = self.act(x)
     return x
 
@@ -129,11 +141,14 @@ class Discriminator(nn.Module):
   def __init__(self):
     super().__init__()
 
+    dropout_rate = 0.2
     self.encoder = Encoder()
+    self.dropout = nn.Dropout2d(p=dropout_rate)
     self.fc = nn.Linear(128, 1)
   
   def forward(self, x):
     x = self.encoder(x)
+    x = self.dropout(x)
     x = self.fc(x.permute(0, 2, 3, 1)).sigmoid()
     return x
 
@@ -163,7 +178,7 @@ class Codebook(nn.Module):
     q = self.embedding(indices)
 
     # loss
-    loss = torch.mean((x.detach() - q)**2) + 0.5*torch.mean((x - q.detach())**2)
+    loss = torch.mean((x.detach() - q)**2) + torch.mean((x - q.detach())**2)
 
     out = x + (q - x).detach()
     out = out.view(batch_size, n_rows, n_cols, embed_dim).permute(0, 3, 1, 2).contiguous()
@@ -184,10 +199,3 @@ class VQGAN(nn.Module):
     fake_img = self.generator(tok_inp)
 
     return fake_img, loss
-
-
-if __name__ == '__main__':
-  import torch
-  x = torch.randn(1, 128, 7, 7)
-  gen = Generator()
-  print(gen(x).shape)

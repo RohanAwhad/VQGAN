@@ -5,7 +5,7 @@ import torch
 import engine
 from dataset import DatasetLoaderLite
 from model import (Encoder, Generator, Discriminator, Codebook, VQGAN,
-  EncoderConfig, GeneratorConfig, DiscriminatorConfig, CodebookConfig
+  # EncoderConfig, GeneratorConfig, DiscriminatorConfig, CodebookConfig
 )
 
 # ===
@@ -37,28 +37,28 @@ dropout_rate = 0.1
 num_embeddings = 8
 latent_dim = embed_dim
 
-ENCODER_CONFIG = EncoderConfig(
-  input_dim=input_dim,
-  output_dim=latent_dim,
-  max_len=max_len,
-  n_hidden_layers=6,
-  n_hidden_dims=[embed_dim] * 6,
-  merge_after=3,
-  intermediate_scale=2,
-  n_heads=n_heads,
-  dropout_rate=dropout_rate
-)
-GENERATOR_CONFIG = GeneratorConfig(
-  input_dim=latent_dim,
-  output_dim=input_dim,
-  max_len=max_len,
-  n_hidden_layers=6,
-  n_hidden_dims=[embed_dim] * 6,
-  merge_after=3,
-  intermediate_scale=2,
-  n_heads=n_heads,
-  dropout_rate=dropout_rate
-)
+# ENCODER_CONFIG = EncoderConfig(
+#   input_dim=input_dim,
+#   output_dim=latent_dim,
+#   max_len=max_len,
+#   n_hidden_layers=6,
+#   n_hidden_dims=[embed_dim] * 6,
+#   merge_after=3,
+#   intermediate_scale=2,
+#   n_heads=n_heads,
+#   dropout_rate=dropout_rate
+# )
+# GENERATOR_CONFIG = GeneratorConfig(
+#   input_dim=latent_dim,
+#   output_dim=input_dim,
+#   max_len=max_len,
+#   n_hidden_layers=6,
+#   n_hidden_dims=[embed_dim] * 6,
+#   merge_after=3,
+#   intermediate_scale=2,
+#   n_heads=n_heads,
+#   dropout_rate=dropout_rate
+# )
 # DISCRIMINATOR_CONFIG = EncoderConfig(
 #   input_dim=input_dim,
 #   output_dim=1,
@@ -70,26 +70,34 @@ GENERATOR_CONFIG = GeneratorConfig(
 #   n_heads=n_heads,
 #   dropout_rate=dropout_rate
 # )
-DISCRIMINATOR_CONFIG = DiscriminatorConfig(
-  input_dim=input_dim,
-  max_len=max_len,
-  n_hidden_layers=4,
-  embed_dim=embed_dim,
-  intermediate_scale=2,
-  n_heads=n_heads,
-  dropout_rate=dropout_rate
-)
-CODEBOOK_CONFIG = CodebookConfig(
-  num_embeddings=num_embeddings,
-  embedding_dim=latent_dim,
-)
+# DISCRIMINATOR_CONFIG = DiscriminatorConfig(
+#   input_dim=input_dim,
+#   max_len=max_len,
+#   n_hidden_layers=4,
+#   embed_dim=embed_dim,
+#   intermediate_scale=2,
+#   n_heads=n_heads,
+#   dropout_rate=dropout_rate
+# )
+# CODEBOOK_CONFIG = CodebookConfig(
+#   num_embeddings=num_embeddings,
+#   embedding_dim=latent_dim,
+# )
 
-codebook = Codebook(**dataclasses.asdict(CODEBOOK_CONFIG))
-encoder = Encoder(**dataclasses.asdict(ENCODER_CONFIG))
-generator = Generator(**dataclasses.asdict(GENERATOR_CONFIG))
+# codebook = Codebook(**dataclasses.asdict(CODEBOOK_CONFIG))
+# encoder = Encoder(**dataclasses.asdict(ENCODER_CONFIG))
+# generator = Generator(**dataclasses.asdict(GENERATOR_CONFIG))
+# vqgan = VQGAN(encoder, codebook, generator)
+
+# discriminator = Discriminator(**dataclasses.asdict(DISCRIMINATOR_CONFIG))
+
+codebook = Codebook(num_embeddings=16, embedding_dim=128)
+encoder = Encoder()
+generator = Generator()
+discriminator = Discriminator()
 vqgan = VQGAN(encoder, codebook, generator)
 
-discriminator = Discriminator(**dataclasses.asdict(DISCRIMINATOR_CONFIG))
+
 
 # compile 
 # vqgan = torch.compile(vqgan)
