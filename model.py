@@ -1,3 +1,4 @@
+import dataclasses
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -42,40 +43,26 @@ class Encoder(nn.Module):
   def __init__(self):
     super().__init__()
 
-    self.conv1 = ConvBlock(in_channels=3, out_channels=64, kernel_size=7, stride=2, padding=2)
+    self.conv1 = ConvBlock(in_channels=1, out_channels=16, kernel_size=7, stride=1, padding=3)
     self.pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
     self.conv2 = nn.Sequential(
-      ResBlock(in_channels=64, out_channels=64),
-      ResBlock(in_channels=256, out_channels=64),
-      ResBlock(in_channels=256, out_channels=64),
+      ResBlock(in_channels=16, out_channels=16),
+      ResBlock(in_channels=64, out_channels=16),
     )
     self.conv3 = nn.Sequential(
-      ResBlock(in_channels=256, out_channels=128, downsample=True),
-      ResBlock(in_channels=512, out_channels=128),
-      ResBlock(in_channels=512, out_channels=128),
-      ResBlock(in_channels=512, out_channels=128),
+      ResBlock(in_channels=64, out_channels=32, downsample=True),
+      ResBlock(in_channels=128, out_channels=32),
     )
-    self.conv4 = nn.Sequential(
-      ResBlock(in_channels=512, out_channels=256, downsample=True),
-      ResBlock(in_channels=1024, out_channels=256),
-      ResBlock(in_channels=1024, out_channels=256),
-      ResBlock(in_channels=1024, out_channels=256),
-      ResBlock(in_channels=1024, out_channels=256),
-      ResBlock(in_channels=1024, out_channels=256),
-    )
-    self.conv5 = nn.Sequential(
-      ResBlock(in_channels=1024, out_channels=512, downsample=True),
-      ResBlock(in_channels=2048, out_channels=512),
-      ResBlock(in_channels=2048, out_channels=512),
-    )
+
 
   def forward(self, x):
     x = self.conv1(x)
+    print('Post conv1:', x.shape)
     x = self.pool(x)
     x = self.conv2(x)
     x = self.conv3(x)
-    x = self.conv4(x)
-    x = self.conv5(x)
+    print('Post conv3:', x.shape)
+    exit()
 
     return x
 
@@ -92,9 +79,7 @@ class DeconvBlock(nn.Module):
         self.act = nn.ReLU()
 
   def forward(self, x):
-    print('  DeconvBlock inp shape:', x.shape)
     x = self.bn(self.deconv(x))
-    print('  DeconvBlock out shape:', x.shape)
     if self.apply_act: x = self.act(x)
     return x
 
@@ -107,19 +92,15 @@ class UpResBlock(nn.Module):
     self.deconv_blocks = nn.Sequential(
       DeconvBlock(in_channels, out_channels, kernel_size=1, stride=1, padding=0, output_padding=0),
       DeconvBlock(out_channels, out_channels, kernel_size=3, stride=self.stride, padding=1, output_padding=1 if upsample else 0),
-      DeconvBlock(out_channels, out_channels, kernel_size=1, stride=1, padding=0, output_padding=0, apply_act=False),  # contraction block
+      DeconvBlock(out_channels, out_channels*4, kernel_size=1, stride=1, padding=0, output_padding=0, apply_act=False),  # contraction block
     )
-    self.shortcut = DeconvBlock(in_channels, out_channels, kernel_size=1, stride=self.stride, padding=0, output_padding=1 if upsample else 0, apply_act=False)
+    self.shortcut = DeconvBlock(in_channels, out_channels*4, kernel_size=1, stride=self.stride, padding=0, output_padding=1 if upsample else 0, apply_act=False)
     self.act = nn.ReLU()
 
   def forward(self, x):
-    print('UpResBlock inp shape:', x.shape)
     deconv_out = self.deconv_blocks(x)
-    print('UpResBlock deconv_out shape:', deconv_out.shape)
     shortcut_out = self.shortcut(x)
-    print('UpResBlock shortcut_out shape:', shortcut_out.shape)
     x = self.act(deconv_out + shortcut_out)
-    print('UpResBlock out shape:', x.shape)
     return x
 
 
@@ -129,27 +110,27 @@ class Generator(nn.Module):
 
     self.deconv5 = nn.Sequential(
       UpResBlock(in_channels=2048, out_channels=512),
-      UpResBlock(in_channels=512, out_channels=512),
-      UpResBlock(in_channels=512, out_channels=512, upsample=True),
+      UpResBlock(in_channels=2048, out_channels=512),
+      UpResBlock(in_channels=2048, out_channels=1024, upsample=True),
     )
     self.deconv4 = nn.Sequential(
-      UpResBlock(in_channels=512, out_channels=256),
-      UpResBlock(in_channels=256, out_channels=256),
-      UpResBlock(in_channels=256, out_channels=256),
-      UpResBlock(in_channels=256, out_channels=256),
-      UpResBlock(in_channels=256, out_channels=256),
-      UpResBlock(in_channels=256, out_channels=256, upsample=True),
+      UpResBlock(in_channels=1024, out_channels=256),
+      UpResBlock(in_channels=1024, out_channels=256),
+      UpResBlock(in_channels=1024, out_channels=256),
+      UpResBlock(in_channels=1024, out_channels=256),
+      UpResBlock(in_channels=1024, out_channels=256),
+      UpResBlock(in_channels=1024, out_channels=512, upsample=True),
     )
     self.deconv3 = nn.Sequential(
-      UpResBlock(in_channels=256, out_channels=128),
-      UpResBlock(in_channels=128, out_channels=128),
-      UpResBlock(in_channels=128, out_channels=128),
-      UpResBlock(in_channels=128, out_channels=128, upsample=True),
+      UpResBlock(in_channels=512, out_channels=128),
+      UpResBlock(in_channels=512, out_channels=128),
+      UpResBlock(in_channels=512, out_channels=128),
+      UpResBlock(in_channels=512, out_channels=256, upsample=True),
     )
     self.deconv2 = nn.Sequential(
-      UpResBlock(in_channels=128, out_channels=64),
-      UpResBlock(in_channels=64, out_channels=64),
-      UpResBlock(in_channels=64, out_channels=64, upsample=True),
+      UpResBlock(in_channels=256, out_channels=64),
+      UpResBlock(in_channels=256, out_channels=64),
+      UpResBlock(in_channels=256, out_channels=64, upsample=True),
     )
     self.deconv1 = DeconvBlock(in_channels=64, out_channels=3, kernel_size=7, stride=2, padding=3, output_padding=1, apply_act=False)
     self.act = nn.Sigmoid()
@@ -219,9 +200,16 @@ class VQGAN(nn.Module):
     self.codebook = codebook
     self.generator = generator
 
-  def forward(self, inp, n_rows, n_cols):
-    enc_inp, n_rows, n_cols = self.encoder(inp, n_rows, n_cols)
+  def forward(self, inp):
+    enc_inp = self.encoder(inp)
     tok_inp, loss = self.codebook(enc_inp)
-    fake_img, n_rows, n_cols = self.generator(tok_inp, n_rows, n_cols)
+    fake_img = self.generator(tok_inp)
 
     return fake_img, loss
+
+
+if __name__ == '__main__':
+  import torch
+  enc = Encoder()
+  x = torch.randn(1, 1, 28, 28)
+  print(enc(x).shape)
