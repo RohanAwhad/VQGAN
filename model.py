@@ -57,13 +57,9 @@ class Encoder(nn.Module):
 
   def forward(self, x):
     x = self.conv1(x)
-    print('Post conv1:', x.shape)
     x = self.pool(x)
     x = self.conv2(x)
     x = self.conv3(x)
-    print('Post conv3:', x.shape)
-    exit()
-
     return x
 
 # ===
@@ -108,36 +104,18 @@ class Generator(nn.Module):
   def __init__(self):
     super().__init__()
 
-    self.deconv5 = nn.Sequential(
-      UpResBlock(in_channels=2048, out_channels=512),
-      UpResBlock(in_channels=2048, out_channels=512),
-      UpResBlock(in_channels=2048, out_channels=1024, upsample=True),
-    )
-    self.deconv4 = nn.Sequential(
-      UpResBlock(in_channels=1024, out_channels=256),
-      UpResBlock(in_channels=1024, out_channels=256),
-      UpResBlock(in_channels=1024, out_channels=256),
-      UpResBlock(in_channels=1024, out_channels=256),
-      UpResBlock(in_channels=1024, out_channels=256),
-      UpResBlock(in_channels=1024, out_channels=512, upsample=True),
-    )
     self.deconv3 = nn.Sequential(
-      UpResBlock(in_channels=512, out_channels=128),
-      UpResBlock(in_channels=512, out_channels=128),
-      UpResBlock(in_channels=512, out_channels=128),
-      UpResBlock(in_channels=512, out_channels=256, upsample=True),
+      UpResBlock(in_channels=128, out_channels=32),
+      UpResBlock(in_channels=128, out_channels=32, upsample=True),
     )
     self.deconv2 = nn.Sequential(
-      UpResBlock(in_channels=256, out_channels=64),
-      UpResBlock(in_channels=256, out_channels=64),
-      UpResBlock(in_channels=256, out_channels=64, upsample=True),
+      UpResBlock(in_channels=128, out_channels=16),
+      UpResBlock(in_channels=64, out_channels=16),
     )
-    self.deconv1 = DeconvBlock(in_channels=64, out_channels=3, kernel_size=7, stride=2, padding=3, output_padding=1, apply_act=False)
+    self.deconv1 = DeconvBlock(in_channels=64, out_channels=1, kernel_size=7, stride=2, padding=3, output_padding=1, apply_act=False)
     self.act = nn.Sigmoid()
 
   def forward(self, x):
-    x = self.deconv5(x)
-    x = self.deconv4(x)
     x = self.deconv3(x)
     x = self.deconv2(x)
     x = self.deconv1(x)
@@ -152,7 +130,7 @@ class Discriminator(nn.Module):
     super().__init__()
 
     self.encoder = Encoder()
-    self.fc = nn.Linear(2048, 1)
+    self.fc = nn.Linear(128, 1)
   
   def forward(self, x):
     x = self.encoder(x)
@@ -210,6 +188,6 @@ class VQGAN(nn.Module):
 
 if __name__ == '__main__':
   import torch
-  enc = Encoder()
-  x = torch.randn(1, 1, 28, 28)
-  print(enc(x).shape)
+  x = torch.randn(1, 128, 7, 7)
+  gen = Generator()
+  print(gen(x).shape)
