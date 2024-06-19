@@ -174,7 +174,7 @@ class Generator(nn.Module):
       nn.Dropout2d(p=dropout_rate),
       UpResBlock(in_channels=256, out_channels=64),
       nn.Dropout2d(p=dropout_rate),
-      UpResBlock(in_channels=256, out_channels=16),
+      UpResBlock(in_channels=256, out_channels=16, upsample=True),
     )
     self.deconv1 = nn.ConvTranspose2d(in_channels=64, out_channels=3, kernel_size=7, stride=2, padding=3, output_padding=1)
     self.act = nn.Sigmoid()
