@@ -203,7 +203,7 @@ class Discriminator(nn.Module):
   def forward(self, x):
     x = self.encoder(x)
     x = self.dropout(x)
-    x = self.fc(x.permute(0, 2, 3, 1)).sigmoid()
+    x = self.fc(x.permute(0, 2, 3, 1))
     return x
 
 

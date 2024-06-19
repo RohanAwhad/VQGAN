@@ -28,22 +28,25 @@ def run(train_ds, test_ds, vqgan, disc, vqgan_opt, disc_opt, N_STEPS, device, lo
 
     batch = train_ds.next_batch()
     images = batch['images'].to(device)
-    fake_img, _, commitment_loss = vqgan(images)
-    disc_out = disc(fake_img).flatten(0, 2)
 
-    reconstruction_loss = ((fake_img - images) ** 2).mean()
-    gan_loss = F.binary_cross_entropy(disc_out, torch.zeros_like(disc_out))
-    lambda_ = calculate_lambda(reconstruction_loss, gan_loss, vqgan.generator.deconv1)
-    gen_loss = lambda_ * gan_loss + reconstruction_loss + commitment_loss
+    with torch.autocast(device_type=device, dtype=torch.bfloat16):
+      fake_img, _, commitment_loss = vqgan(images)
+      disc_out = disc(fake_img).flatten(0, 2)
+
+      reconstruction_loss = ((fake_img - images) ** 2).mean()
+      gan_loss = F.binary_cross_entropy_with_logits(disc_out, torch.zeros_like(disc_out))
+      lambda_ = calculate_lambda(reconstruction_loss, gan_loss, vqgan.generator.deconv1)
+      gen_loss = lambda_ * gan_loss + reconstruction_loss + commitment_loss
+
+      real_img_disc_out = disc(images).flatten(0, 2)
+
+      y_hat = torch.cat([real_img_disc_out, disc_out])
+      y_true = torch.cat([torch.ones_like(real_img_disc_out), torch.zeros_like(disc_out)])
+      disc_loss = F.binary_cross_entropy_with_logits(y_hat, y_true) / 2
 
     vqgan_opt.zero_grad()
     gen_loss.backward(retain_graph=True)
 
-    real_img_disc_out = disc(images).flatten(0, 2)
-
-    y_hat = torch.cat([real_img_disc_out, disc_out])
-    y_true = torch.cat([torch.ones_like(real_img_disc_out), torch.zeros_like(disc_out)])
-    disc_loss = F.binary_cross_entropy(y_hat, y_true) / 2
 
     disc_opt.zero_grad()
     disc_loss.backward()

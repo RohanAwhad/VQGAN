@@ -2,6 +2,7 @@ import random
 import glob
 import torch
 
+from datasets import load_dataset
 from PIL import Image
 from torchvision.transforms import v2
 
@@ -12,8 +13,8 @@ TRANSFORM = v2.Compose([
 ])
 
 class DatasetLoaderLite:
-  def __init__(self, root: str, batch_size: int, shuffle: bool):
-    self.ds = glob.glob(root + "/*/*.jpg")
+  def __init__(self, split: str, batch_size: int, shuffle: bool):
+    self.ds = load_dataset('ILSVRC/imagenet-1k', split=split)
     self.batch_size = batch_size
     self.indices = list(range(len(self.ds)))
     if shuffle: random.shuffle(self.indices)
@@ -30,7 +31,7 @@ class DatasetLoaderLite:
     
     imgs = []
     for idx in next_indices:
-      img = Image.open(self.ds[idx]).convert('RGB')
+      img = self.ds[idx]['image'].convert('RGB')
       img_tensor = self.transform(img) / 255.0
       imgs.append(img_tensor)
 

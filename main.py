@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv('/home/rawhad/personal_jobs/VQGAN/dev.env')
+
 import os
 import torch
 
@@ -20,14 +23,14 @@ if torch.backends.mps.is_available(): DEVICE = 'mps'
 MODEL_DIR = './models'
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-LOGGER = logger.ConsoleLogger(project_name='vqgan', run_name='test-mnist')
+LOGGER = logger.WandbLogger(project_name='vqgan', run_name='test-imagenet')
+#LOGGER = logger.ConsoleLogger(project_name='vqgan', run_name='test-imagenet')
 
 # ===
 # Intialization
 # ===
-DATA_DIR = "/Users/rohan/3_Resources/ai_datasets/caltech_101/caltech101/101_ObjectCategories"
-train_ds = DatasetLoaderLite(root=DATA_DIR, batch_size=BATCH_SIZE, shuffle=True)
-test_ds = DatasetLoaderLite(root=DATA_DIR, batch_size=BATCH_SIZE, shuffle=False)
+train_ds = DatasetLoaderLite(split='train', batch_size=BATCH_SIZE, shuffle=True)
+test_ds = DatasetLoaderLite(split='validation', batch_size=BATCH_SIZE, shuffle=False)
 
 codebook = Codebook(num_embeddings=64, embedding_dim=2048)
 encoder = Encoder()
@@ -39,6 +42,11 @@ vqgan = VQGAN(encoder, codebook, generator)
 vqgan_opt = torch.optim.AdamW(vqgan.parameters(), lr=GEN_LR)
 disc_opt = torch.optim.AdamW(discriminator.parameters(), lr=DISC_LR)
 
+# Unable to compile
+#vqgan = torch.compile(vqgan)
+#discriminator = torch.compile(discriminator)
+
+torch.set_float32_matmul_precision('high')
 engine.run(train_ds, test_ds, vqgan, discriminator, vqgan_opt, disc_opt, N_STEPS, DEVICE, LOGGER)
 
 # save models
