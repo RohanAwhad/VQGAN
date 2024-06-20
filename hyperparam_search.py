@@ -8,8 +8,8 @@ SLURM_JOBSCRIPT_TMPLT = """#!/bin/bash
 #SBATCH -G a30:1
 #SBATCH -p general      # partition 
 #SBATCH -q public       # QOS
-#SBATCH -o slurm.%j.out # file to save job's STDOUT (%j = JobId)
-#SBATCH -e slurm.%j.err # file to save job's STDERR (%j = JobId)
+#SBATCH -o hyperparam_search_jobs/slurm.%j.out # file to save job's STDOUT (%j = JobId)
+#SBATCH -e hyperparam_search_jobs/slurm.%j.err # file to save job's STDERR (%j = JobId)
 #SBATCH --mail-type=ALL # Send an e-mail when a job starts, stops, or fails
 #SBATCH --export=NONE   # Purge the job-submitting shell environment
 
@@ -23,15 +23,16 @@ nvidia-smi
 source "/home/rawhad/personal_jobs/VQGAN/dev.env"
 
 python -c "import torch; print(torch.cuda.is_available())"
-python "/home/rawhad/personal_jobs/VQGAN/VQGAN/main.py \
-  --lr {lr} \
-  --batch_size 64 \
-  --n_steps 500 \
-  --num_embeddings 1024 \
-  --dropout_rate {dropout_rate} \
-  --data_dir "/scratch/rawhad/datasets/preprocessed_tiny_imagenet" \
-  --project_name vqgan_hyperparam_search \
-  --run_name {run_name}
+python "/home/rawhad/personal_jobs/VQGAN/VQGAN/main.py" \\
+  --lr "{lr}" \\
+  --batch_size 64 \\
+  --n_steps 500 \\
+  --num_embeddings 1024 \\
+  --dropout_rate "{dropout_rate}" \\
+  --data_dir "/scratch/rawhad/datasets/preprocessed_tiny_imagenet" \\
+  --project_name "vqgan_hyperparam_search" \\
+  --run_name "{run_name}" \\
+;
 """
 
 
@@ -39,8 +40,7 @@ import random
 import os
 
 ATTEMPT = 0
-# N = 20
-N = 2
+N = 20
 for i in range(N):
   lr = 10**random.uniform(-5, -2)
   dropout_rate = 10**random.uniform(-2, -0.8)

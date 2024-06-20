@@ -53,6 +53,7 @@ def process(img: Image.Image):
 
 def process_ds(indices, ds, split):
   n_procs = max(1, os.cpu_count()//2)
+  print(f'Using {n_procs} processes')
   with mp.Pool(n_procs) as pool:
     imgs = []
     shard_id = 0

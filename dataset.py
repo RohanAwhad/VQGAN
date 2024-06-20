@@ -21,14 +21,14 @@ class ImageNetDatasetLoaderLite(Dataset):
   def __init__(self, root: str, split: str, batch_size: int):
     self.root = root
     self.batch_size = batch_size
-    self.indices = list(range(len(self.ds)))
     self.split = split
 
     self.files = glob.glob(os.path.join(root, f'{split}_*.pkl'))
+    self.curr_file_ptr = None
     self.reset()
 
   def reset(self):
-    if self.curr_file_ptr != 0:  # loading shard is costly, and this op is common during overfitting or hyperparameter tuning
+    if self.curr_file_ptr is None or self.curr_file_ptr != 0:  # loading shard is costly, and this op is common during overfitting or hyperparameter tuning
       self.curr_file_ptr = 0
       self.load_shard()
     self.curr_idx = 0
@@ -47,7 +47,7 @@ class ImageNetDatasetLoaderLite(Dataset):
     
     if len(batch) < self.batch_size:
       remainder = self.batch_size - len(batch)
-      batch = torch.vstack(batch, torch.from_numpy(self.curr_shard[:remainder]))
+      batch = torch.vstack((batch, torch.from_numpy(self.curr_shard[:remainder])))
       self.curr_idx = remainder
     
     return {'images': batch}
