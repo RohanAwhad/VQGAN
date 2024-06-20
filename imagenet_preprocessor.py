@@ -48,15 +48,16 @@ def process(img: Image.Image):
   # center crop
   img = v2.functional.center_crop(img, (new_w, new_w))
   img_tensor = TRANSFORM(img) / 255.0
+  return img_tensor
 
 
 def process_ds(indices, ds, split):
-  n_procs = os.cpu_count() - 1
+  n_procs = max(1, os.cpu_count()//2)
   with mp.Pool(n_procs) as pool:
     imgs = []
     shard_id = 0
     pbar = tqdm(total=len(indices), desc=f'Processing {split}')
-    for img_tensor in pool.imap_unordered(process, map(lambda idx: ds[idx]['image'], indices), chunksize=50):
+    for img_tensor in pool.imap_unordered(process, map(lambda idx: ds[idx]['image'], indices), chunksize=100):
       pbar.update(1)
       imgs.append(img_tensor)
 
