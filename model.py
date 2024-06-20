@@ -5,6 +5,32 @@ import torch.nn.functional as F
 
 
 # ===
+# Attention Block (Non-Local Block)
+# ===
+class AttentionBlock(nn.Module):
+  def __init__(self, in_channels):
+    super().__init__()
+    
+    self.in_channels = in_channels
+    self.q = nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
+    self.k = nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
+    self.v = nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
+    self.out = nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
+
+  def forward(self, x):
+    batch_size, n_channels, n_rows, n_cols = x.shape
+    q = self.q(x).view(batch_size, n_channels, -1).permute(0, 2, 1)
+    k = self.k(x).view(batch_size, n_channels, -1).permute(0, 2, 1)
+    v = self.v(x).view(batch_size, n_channels, -1).permute(0, 2, 1)
+
+    y = F.scaled_dot_product_attention(q, k, v) # flash attention
+    y = y.permute(0, 2, 1).contiguous().view(batch_size, n_channels, n_rows, n_cols)
+    out = self.out(y)
+    return out
+
+
+
+# ===
 # Encoder
 # ===
 class ConvBlock(nn.Module):
@@ -40,9 +66,8 @@ class ResBlock(nn.Module):
     return x
 
 class Encoder(nn.Module):
-  def __init__(self):
+  def __init__(self, dropout_rate):
     super().__init__()
-    dropout_rate = 0.2
 
     self.conv1 = ConvBlock(in_channels=3, out_channels=64, kernel_size=7, stride=2, padding=3)
     self.pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
@@ -82,6 +107,7 @@ class Encoder(nn.Module):
       nn.Dropout2d(p=dropout_rate),
       ResBlock(in_channels=2048, out_channels=512),
       nn.Dropout2d(p=dropout_rate),
+      AttentionBlock(in_channels=2048), # non-local block
       ResBlock(in_channels=2048, out_channels=512),
     )
 
@@ -135,13 +161,13 @@ class UpResBlock(nn.Module):
 
 
 class Generator(nn.Module):
-  def __init__(self):
+  def __init__(self, dropout_rate):
     super().__init__()
 
-    dropout_rate = 0.2
     self.deconv5 = nn.Sequential(
       UpResBlock(in_channels=2048, out_channels=512),
       nn.Dropout2d(p=dropout_rate),
+      AttentionBlock(in_channels=2048),  # non-local block
       UpResBlock(in_channels=2048, out_channels=512),
       nn.Dropout2d(p=dropout_rate),
       UpResBlock(in_channels=2048, out_channels=256, upsample=True),
@@ -192,11 +218,10 @@ class Generator(nn.Module):
 # Discriminator model
 # ===
 class Discriminator(nn.Module):
-  def __init__(self):
+  def __init__(self, dropout_rate):
     super().__init__()
 
-    dropout_rate = 0.2
-    self.encoder = Encoder()
+    self.encoder = Encoder(dropout_rate)
     self.dropout = nn.Dropout2d(p=dropout_rate)
     self.fc = nn.Linear(2048, 1)
   
