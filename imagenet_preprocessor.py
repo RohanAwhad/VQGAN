@@ -56,7 +56,7 @@ def process_ds(indices, ds, split):
     imgs = []
     shard_id = 0
     pbar = tqdm(total=len(indices), desc=f'Processing {split}')
-    for img_tensor in pool.imap_unordered(process, map(lambda idx: ds[idx], indices), chunksize=50):
+    for img_tensor in pool.imap_unordered(process, map(lambda idx: ds[idx]['image'], indices), chunksize=50):
       pbar.update(1)
       imgs.append(img_tensor)
 
