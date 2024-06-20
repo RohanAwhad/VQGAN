@@ -1,25 +1,70 @@
-import random
 import glob
+import os
+import pickle
+import random
 import torch
 
+from abc import ABC, abstractmethod
 from datasets import load_dataset
-from PIL import Image
 from torchvision.transforms import v2
 
-TRANSFORM = v2.Compose([
-  v2.PILToTensor(),
-  v2.CenterCrop(224),
-  v2.Resize(224)
-])
+class Dataset(ABC):
+  @abstractmethod
+  def next_batch(self):
+    pass
 
-class DatasetLoaderLite:
-  def __init__(self, split: str, batch_size: int, shuffle: bool):
-    self.ds = load_dataset('ILSVRC/imagenet-1k', split=split)
+  @abstractmethod
+  def reset(self):
+    pass
+
+class ImageNetDatasetLoaderLite(Dataset):
+  def __init__(self, root: str, split: str, batch_size: int):
+    self.root = root
+    self.batch_size = batch_size
+    self.indices = list(range(len(self.ds)))
+    self.split = split
+
+    self.files = glob.glob(os.path.join(root, f'{split}_*.pkl'))
+    self.reset()
+
+  def reset(self):
+    if self.curr_file_ptr != 0:  # loading shard is costly, and this op is common during overfitting or hyperparameter tuning
+      self.curr_file_ptr = 0
+      self.load_shard()
+    self.curr_idx = 0
+
+  def load_shard(self):
+    with open(self.files[self.curr_file_ptr], 'rb') as f:
+      self.curr_shard = pickle.load(f)
+
+  def next_batch(self):
+    batch = torch.from_numpy(self.curr_shard[self.curr_idx:self.curr_idx+self.batch_size])
+    self.curr_idx = self.curr_idx + self.batch_size
+    if self.curr_idx >= len(self.curr_shard):
+      self.curr_file_ptr = (self.curr_file_ptr + 1) % len(self.files)
+      self.curr_idx = 0
+      self.load_shard()
+    
+    if len(batch) < self.batch_size:
+      remainder = self.batch_size - len(batch)
+      batch = torch.vstack(batch, torch.from_numpy(self.curr_shard[:remainder]))
+      self.curr_idx = remainder
+    
+    return {'images': batch}
+
+
+
+class MNISTDatasetLoaderLite(Dataset):
+  def __init__(self, train: bool, root: str, batch_size: int, shuffle: bool):
+    import torchvision
+    from torchvision.transforms import ToTensor
+
+    self.ds = torchvision.datasets.MNIST(root=root, train=train, download=True)
     self.batch_size = batch_size
     self.indices = list(range(len(self.ds)))
     if shuffle: random.shuffle(self.indices)
 
-    self.transform = TRANSFORM
+    self.to_tensor = ToTensor()
     self.reset()
 
   def reset(self):
@@ -28,11 +73,13 @@ class DatasetLoaderLite:
   def next_batch(self):
     next_indices = self.indices[self.curr_idx:self.curr_idx+self.batch_size]
     self.curr_idx = (self.curr_idx + self.batch_size) % len(self.ds)
-    
+
     imgs = []
     for idx in next_indices:
-      img = self.ds[idx]['image'].convert('RGB')
-      img_tensor = self.transform(img) / 255.0
+      img, _ = self.ds[idx]
+      img_tensor = self.to_tensor(img)
       imgs.append(img_tensor)
 
-    return {'images': torch.stack(imgs)}
+    return {
+      'images': torch.stack(imgs),
+    }
