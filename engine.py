@@ -1,13 +1,32 @@
 import math
 import matplotlib.pyplot as plt
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
+# Perceptual Loss
+# Didn't seem to work quite well on CIFAR10 in colab
+class PerceptualLoss(nn.Module):
+  def __init__(self, device):
+    import timm
+    super().__init__()
+    self.model = timm.create_model(model_name='vgg19_bn.tv_in1k', pretrained=True, features_only=True)
+    self.model = self.model.eval()
+    self.model.to(device)
+    for param in self.model.parameters(): param.requires_grad = False
+
+  def forward(self, predicted, targets):
+    predicted = self.model(predicted)[-1]
+    targets = self.model(targets)[-1]
+    return F.mse_loss(predicted, targets)
+    
+
+# Lambda
 def calculate_lambda(perceptual_loss, gan_loss, gen_last_layer):
   last_layer_weight = gen_last_layer.weight
   perceptual_loss_grad = torch.autograd.grad(perceptual_loss, last_layer_weight, retain_graph=True)[0]
   gan_loss_grad = torch.autograd.grad(gan_loss, last_layer_weight, retain_graph=True)[0]
-  lambda_ = torch.norm(perceptual_loss_grad) / (torch.norm(gan_loss_grad) + 1e-4)
+  lambda_ = torch.norm(perceptual_loss_grad) / (torch.norm(gan_loss_grad) + 1e-6)
   return torch.clamp(lambda_, 0, 1e4).detach()
 
 def run(train_ds, test_ds, vqgan, disc, vqgan_opt, disc_opt, N_STEPS, device, logger):
@@ -24,6 +43,8 @@ def run(train_ds, test_ds, vqgan, disc, vqgan_opt, disc_opt, N_STEPS, device, lo
   vqgan.train()
   disc.train()
 
+  # get_perceptual_loss = PerceptualLoss(device)
+
   for i in range(N_STEPS):
 
     batch = train_ds.next_batch()
@@ -33,6 +54,7 @@ def run(train_ds, test_ds, vqgan, disc, vqgan_opt, disc_opt, N_STEPS, device, lo
       fake_img, _, commitment_loss = vqgan(images)
       disc_out = disc(fake_img).flatten(0, 2)
 
+      # reconstruction_loss = get_perceptual_loss(fake_img, images)
       reconstruction_loss = ((fake_img - images) ** 2).mean()
       gan_loss = F.binary_cross_entropy_with_logits(disc_out, torch.zeros_like(disc_out))
       lambda_ = calculate_lambda(reconstruction_loss, gan_loss, vqgan.generator.deconv1)
