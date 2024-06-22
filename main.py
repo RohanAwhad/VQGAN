@@ -15,6 +15,7 @@ from model import Encoder, Generator, Discriminator, Codebook, VQGAN
 argparser = argparse.ArgumentParser()
 argparser.add_argument('--lr', type=float, default=3e-4)
 argparser.add_argument('--batch_size', type=int, default=64)
+argparser.add_argument('--micro_batch_size', type=int, default=0)
 argparser.add_argument('--n_steps', type=int, default=5000)
 argparser.add_argument('--num_embeddings', type=int, default=1024)
 argparser.add_argument('--dropout_rate', type=float, default=0.1)
@@ -27,7 +28,7 @@ args = argparser.parse_args()
 
 LR = args.lr
 TOTAL_BATCH_SIZE = args.batch_size
-MICRO_BATCH_SIZE = args.micro_batch_size
+MICRO_BATCH_SIZE = args.micro_batch_size if args.micro_batch_size > 0 else TOTAL_BATCH_SIZE
 assert TOTAL_BATCH_SIZE % MICRO_BATCH_SIZE == 0, "Total batch size must be divisible by micro batch size"
 GRAD_ACCUM_STEPS = TOTAL_BATCH_SIZE // MICRO_BATCH_SIZE
 N_STEPS = args.n_steps
@@ -50,7 +51,7 @@ DEVICE = 'cpu'
 if torch.cuda.is_available(): DEVICE = 'cuda'
 if torch.backends.mps.is_available(): DEVICE = 'mps'
 
-MODEL_DIR = './models'
+MODEL_DIR = '/scratch/rawhad/VQGAN/models'
 os.makedirs(MODEL_DIR, exist_ok=True)
 
 LOGGER = logger.WandbLogger(project_name=PROJECT_NAME, run_name=RUN_NAME)
