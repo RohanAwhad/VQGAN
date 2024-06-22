@@ -2,6 +2,7 @@ from dotenv import load_dotenv
 load_dotenv('/home/rawhad/personal_jobs/VQGAN/dev.env')
 
 import argparse
+import inspect
 import os
 import torch
 
@@ -69,17 +70,33 @@ generator = Generator(DROPOUT_RATE)
 discriminator = Discriminator(DROPOUT_RATE)
 vqgan = VQGAN(encoder, codebook, generator)
 
+# ===
+# Configure Optimizers and LR Schedulers
+# ===
 
-vqgan_opt = torch.optim.AdamW(vqgan.parameters(), lr=GEN_LR)
-disc_opt = torch.optim.AdamW(discriminator.parameters(), lr=DISC_LR)
+def configure_optimizer(model, weight_decay, lr, device: str):
+  # get all parameters that require grad
+  params = filter(lambda p: p.requires_grad, model.parameters())
+  # create param groups based on ndim
+  optim_groups = [
+    {'params': [p for p in params if p.ndim >= 2], 'weight_decay': weight_decay},
+    {'params': [p for p in params if p.ndim < 1], 'weight_decay': 0.0},
+  ]
+  # use fused optimizer if available
+  fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+  use_fused = fused_available and 'cuda' in device
+  return torch.optim.AdamW(optim_groups, lr=lr, betas=(0.9, 0.95), eps=1e-8, fused=use_fused)
+
+vqgan_opt = configure_optimizer(vqgan, 0.1, GEN_LR, DEVICE)
+disc_opt = configure_optimizer(discriminator, 0.1, DISC_LR, DEVICE)
+# lr scheduler
+lr_scheduler = engine.CosineLRScheduler(WARMUP_STEPS, MAX_STEPS, MAX_LR, MIN_LR)
 
 # Unable to compile
 #vqgan = torch.compile(vqgan)
 #discriminator = torch.compile(discriminator)
 torch.set_float32_matmul_precision('high')
 
-# lr scheduler
-lr_scheduler = engine.CosineLRScheduler(WARMUP_STEPS, MAX_STEPS, MAX_LR, MIN_LR)
 training_config = engine.EngineConfig(
   train_ds=train_ds,
   test_ds=test_ds,
