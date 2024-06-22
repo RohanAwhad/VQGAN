@@ -164,7 +164,9 @@ def run(config: EngineConfig):
         # reconstruction_loss = get_perceptual_loss(fake_img, images)
         reconstruction_loss = ((fake_img - images) ** 2).mean()
         gan_loss = F.binary_cross_entropy_with_logits(disc_out, torch.zeros_like(disc_out))
-        lambda_ = calculate_lambda(reconstruction_loss, gan_loss, raw_vqgan.generator.deconv1)
+        #lambda_ = calculate_lambda(reconstruction_loss, gan_loss, raw_vqgan.generator.deconv1)
+        # lambda as a constant
+        lambda_ = 1.0
         gen_loss = lambda_ * gan_loss + reconstruction_loss + commitment_loss
         gen_loss = gen_loss / config.grad_accum_steps
       # if ddp, sync gradients on last micro_step
