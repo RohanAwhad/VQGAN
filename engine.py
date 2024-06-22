@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.distributed as dist
 
 from .dataset import Dataset
 from .logger import Logger
@@ -75,10 +76,21 @@ class EngineConfig:
   checkpoint_every: int
   checkpoint_dir: str
   last_step: int = -1
+  # ddp vars
+  is_ddp: bool
+  ddp_rank: int
+  ddp_local_rank: int
+  ddp_world_size: int
+  is_master_process: bool
+
 
 def run(config: EngineConfig):
   config.vqgan.to(config.device)
   config.disc.to(config.device)
+
+  if config.is_ddp:
+    config.vqgan = nn.parallel.DistributedDataParallel(config.vqgan, device_ids=[config.ddp_local_rank])
+    config.disc = nn.parallel.DistributedDataParallel(config.disc, device_ids=[config.ddp_local_rank])
 
   config.vqgan_opt.zero_grad()
   config.disc_opt.zero_grad()
@@ -139,30 +151,39 @@ def run(config: EngineConfig):
         disc_loss = disc_loss / config.grad_accum_steps
 
         # log
-        log_data['disc']['total_loss'] += disc_loss.item()
-        log_data['gen']['total_loss'] += gen_loss.item()
-        log_data['gen']['commitment_loss'] += commitment_loss.item()
-        log_data['gen']['reconstruction_loss'] += reconstruction_loss.item()
-        log_data['gen']['lambda_'] += lambda_.item()
-        log_data['gen']['gan_loss'] += gan_loss.item()
+        log_data['disc']['total_loss'] += disc_loss.detach()
+        log_data['gen']['total_loss'] += gen_loss.detach()
+        log_data['gen']['commitment_loss'] += commitment_loss.detach()
+        log_data['gen']['reconstruction_loss'] += reconstruction_loss.detach()
+        log_data['gen']['lambda_'] += (lambda_.detach() / config.grad_accum_steps)
+        log_data['gen']['gan_loss'] += gan_loss.detach()
+
+      if config.is_ddp:  # if ddp, sync gradients on last micro_step
+        config.vqgan.require_backward_grad_sync = (micro_step == config.grad_accum_steps - 1)
+        config.disc.require_backward_grad_sync = (micro_step == config.grad_accum_steps - 1)
+
+      gen_loss.backward(retain_graph=True)
+      disc_loss.backward()
 
     lr = config.lr_scheduler.get_lr(step)
     for param_group in config.vqgan_opt.param_groups: param_group['lr'] = lr
     for param_group in config.disc_opt.param_groups: param_group['lr'] = lr
 
-    config.vqgan_opt.zero_grad()
-    gen_loss.backward(retain_graph=True)
-
-    config.disc_opt.zero_grad()
-    disc_loss.backward()
-
     config.vqgan_opt.step()
     config.disc_opt.step()
 
-    config.logger.log(log_data, step=step)
+    log_data['lr'] = lr
+    if config.is_ddp:
+      dist.all_reduce(log_data['disc']['total_loss'], op=dist.ReduceOp.AVG)
+      dist.all_reduce(log_data['gen']['total_loss'], op=dist.ReduceOp.AVG)
+      dist.all_reduce(log_data['gen']['commitment_loss'], op=dist.ReduceOp.AVG)
+      dist.all_reduce(log_data['gen']['reconstruction_loss'], op=dist.ReduceOp.AVG)
+      dist.all_reduce(log_data['gen']['lambda_'], op=dist.ReduceOp.AVG)
+      dist.all_reduce(log_data['gen']['gan_loss'], op=dist.ReduceOp.AVG)
+    if config.is_master_process: config.logger.log(log_data, step=step)
 
     # periodically plot test images
-    if step % 1000 == 0:
+    if step % 1000 == 0 and config.is_master_process:
 
       with torch.no_grad():
         config.vqgan.eval()
@@ -198,7 +219,7 @@ def run(config: EngineConfig):
       plt.close()
 
     # periodically save model and optimizer state
-    if step % config.checkpoint_every == 0:
+    if step % config.checkpoint_every == 0 and config.is_master_process:
       with open(f'{config.checkpoint_dir}/last_step.txt', 'w') as f: f.write(str(step))
       torch.save(config.vqgan.state_dict(), f'{config.checkpoint_dir}/vqgan.pth')
       torch.save(config.disc.state_dict(), f'{config.checkpoint_dir}/disc.pth')
