@@ -1,4 +1,5 @@
 import dataclasses
+import inspect
 import math
 import matplotlib.pyplot as plt
 import torch
@@ -6,10 +7,29 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
 
-from .dataset import Dataset
-from .logger import Logger
+from dataset import Dataset
+from logger import Logger
+
+# ===
+# Configure Optimizer
+# ===
+def configure_optimizer(model, weight_decay, lr, device_type):
+  # get all parameters that require grad
+  params = filter(lambda p: p.requires_grad, model.parameters())
+  # create param groups based on ndim
+  optim_groups = [
+    {'params': [p for p in params if p.ndim >= 2], 'weight_decay': weight_decay},
+    {'params': [p for p in params if p.ndim < 1], 'weight_decay': 0.0},
+  ]
+  # use fused optimizer if available
+  fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+  use_fused = fused_available and device_type == 'cuda'
+  return torch.optim.AdamW(optim_groups, lr=lr, betas=(0.9, 0.95), eps=1e-8, fused=use_fused)
 
 
+# ===
+# LR Scheduler
+# ===
 class CosineLRScheduler:
   def __init__(self, warmup_steps, max_steps, max_lr, min_lr):
     self.warmup_steps = warmup_steps
@@ -32,7 +52,6 @@ class CosineLRScheduler:
     coeff = 0.5 * (1 + math.cos(math.pi * decay_ratio))
     return self.min_lr + coeff * (self.max_lr - self.min_lr)
 
-  
 
 
 # Perceptual Loss
@@ -66,8 +85,6 @@ class EngineConfig:
   test_ds: Dataset
   vqgan: nn.Module
   disc: nn.Module
-  vqgan_opt: torch.optim.Optimizer
-  disc_opt: torch.optim.Optimizer
   N_STEPS: int
   device: str
   logger: Logger
@@ -75,7 +92,7 @@ class EngineConfig:
   grad_accum_steps: int
   checkpoint_every: int
   checkpoint_dir: str
-  last_step: int = -1
+  last_step: int
   # ddp vars
   is_ddp: bool
   ddp_rank: int
@@ -85,6 +102,8 @@ class EngineConfig:
 
 
 def run(config: EngineConfig):
+  device_type = 'cuda' if config.device.startswith('cuda') else config.device
+
   config.vqgan.to(config.device)
   config.disc.to(config.device)
 
@@ -92,13 +111,19 @@ def run(config: EngineConfig):
     config.vqgan = nn.parallel.DistributedDataParallel(config.vqgan, device_ids=[config.ddp_local_rank])
     config.disc = nn.parallel.DistributedDataParallel(config.disc, device_ids=[config.ddp_local_rank])
 
-  config.vqgan_opt.zero_grad()
-  config.disc_opt.zero_grad()
+  raw_vqgan = config.vqgan.module if config.is_ddp else config.vqgan
+  raw_disc = config.disc.module if config.is_ddp else config.disc
+
+  vqgan_opt = configure_optimizer(raw_vqgan, 0.1, config.lr_scheduler.max_lr, device_type) # lr is placeholder
+  disc_opt = configure_optimizer(raw_disc, 0.1, config.lr_scheduler.max_lr, device_type)
+
+  vqgan_opt.zero_grad()
+  disc_opt.zero_grad()
 
   test_samples = config.test_ds.next_batch()
   test_images = test_samples['images'].to(config.device)
 
-  print("Training for steps:", config.N_STEPS)
+  if config.is_master_process: print("Training for steps:", config.N_STEPS)
   config.vqgan.train()
   config.disc.train()
 
@@ -107,11 +132,11 @@ def run(config: EngineConfig):
     # load model and optimizer state
     config.vqgan.load_state_dict(torch.load(f'{config.checkpoint_dir}/vqgan.pth'))
     config.disc.load_state_dict(torch.load(f'{config.checkpoint_dir}/disc.pth'))
-    config.vqgan_opt.load_state_dict(torch.load(f'{config.checkpoint_dir}/vqgan_opt.pth'))
-    config.disc_opt.load_state_dict(torch.load(f'{config.checkpoint_dir}/disc_opt.pth'))
+    vqgan_opt.load_state_dict(torch.load(f'{config.checkpoint_dir}/vqgan_opt.pth'))
+    disc_opt.load_state_dict(torch.load(f'{config.checkpoint_dir}/disc_opt.pth'))
     with open(f'{config.checkpoint_dir}/last_step.txt', 'r') as f: start_step = int(f.read())
   else:
-    print("Starting training from scratch")
+    if config.is_master_process: print("Starting training from scratch")
     start_step = 0
 
   for step in range(start_step, config.N_STEPS):
@@ -126,20 +151,20 @@ def run(config: EngineConfig):
       )
     )
 
-    config.vqgan_opt.zero_grad()
-    config.disc_opt.zero_grad()
+    vqgan_opt.zero_grad()
+    disc_opt.zero_grad()
     for micro_step in range(config.grad_accum_steps):
       batch = config.train_ds.next_batch()
       images = batch['images'].to(config.device)
 
-      with torch.autocast(device_type=config.device, dtype=torch.bfloat16):
+      with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
         fake_img, _, commitment_loss = config.vqgan(images)
         disc_out = config.disc(fake_img).flatten(0, 2)
 
         # reconstruction_loss = get_perceptual_loss(fake_img, images)
         reconstruction_loss = ((fake_img - images) ** 2).mean()
         gan_loss = F.binary_cross_entropy_with_logits(disc_out, torch.zeros_like(disc_out))
-        lambda_ = calculate_lambda(reconstruction_loss, gan_loss, config.vqgan.generator.deconv1)
+        lambda_ = calculate_lambda(reconstruction_loss, gan_loss, raw_vqgan.generator.deconv1)
         gen_loss = lambda_ * gan_loss + reconstruction_loss + commitment_loss
         gen_loss = gen_loss / config.grad_accum_steps
 
@@ -166,11 +191,11 @@ def run(config: EngineConfig):
       disc_loss.backward()
 
     lr = config.lr_scheduler.get_lr(step)
-    for param_group in config.vqgan_opt.param_groups: param_group['lr'] = lr
-    for param_group in config.disc_opt.param_groups: param_group['lr'] = lr
+    for param_group in vqgan_opt.param_groups: param_group['lr'] = lr
+    for param_group in disc_opt.param_groups: param_group['lr'] = lr
 
-    config.vqgan_opt.step()
-    config.disc_opt.step()
+    vqgan_opt.step()
+    disc_opt.step()
 
     log_data['lr'] = lr
     if config.is_ddp:
@@ -223,5 +248,5 @@ def run(config: EngineConfig):
       with open(f'{config.checkpoint_dir}/last_step.txt', 'w') as f: f.write(str(step))
       torch.save(config.vqgan.state_dict(), f'{config.checkpoint_dir}/vqgan.pth')
       torch.save(config.disc.state_dict(), f'{config.checkpoint_dir}/disc.pth')
-      torch.save(config.vqgan_opt.state_dict(), f'{config.checkpoint_dir}/vqgan_opt.pth')
-      torch.save(config.disc_opt.state_dict(), f'{config.checkpoint_dir}/disc_opt.pth')
+      torch.save(vqgan_opt.state_dict(), f'{config.checkpoint_dir}/vqgan_opt.pth')
+      torch.save(disc_opt.state_dict(), f'{config.checkpoint_dir}/disc_opt.pth')

@@ -80,8 +80,11 @@ MODEL_DIR = '/scratch/rawhad/VQGAN/models'
 if is_master_process:
   os.makedirs(MODEL_DIR, exist_ok=True)
 
-LOGGER = logger.WandbLogger(project_name=PROJECT_NAME, run_name=RUN_NAME) if is_master_process else None
-#LOGGER = logger.ConsoleLogger(project_name='vqgan', run_name='test-imagenet')
+if is_master_process:
+  #LOGGER = logger.WandbLogger(project_name=PROJECT_NAME, run_name=RUN_NAME)
+  LOGGER = logger.ConsoleLogger(project_name='vqgan', run_name='test-imagenet')
+else:
+  LOGGER = None
 
 # ===
 # Intialization
@@ -102,21 +105,7 @@ vqgan = VQGAN(encoder, codebook, generator)
 # Configure Optimizers and LR Schedulers
 # ===
 
-def configure_optimizer(model, weight_decay, lr, device: str):
-  # get all parameters that require grad
-  params = filter(lambda p: p.requires_grad, model.parameters())
-  # create param groups based on ndim
-  optim_groups = [
-    {'params': [p for p in params if p.ndim >= 2], 'weight_decay': weight_decay},
-    {'params': [p for p in params if p.ndim < 1], 'weight_decay': 0.0},
-  ]
-  # use fused optimizer if available
-  fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
-  use_fused = fused_available and 'cuda' in device
-  return torch.optim.AdamW(optim_groups, lr=lr, betas=(0.9, 0.95), eps=1e-8, fused=use_fused)
 
-vqgan_opt = configure_optimizer(vqgan, 0.1, GEN_LR, DEVICE)
-disc_opt = configure_optimizer(discriminator, 0.1, DISC_LR, DEVICE)
 # lr scheduler
 lr_scheduler = engine.CosineLRScheduler(WARMUP_STEPS, MAX_STEPS, MAX_LR, MIN_LR)
 
@@ -129,9 +118,7 @@ training_config = engine.EngineConfig(
   train_ds=train_ds,
   test_ds=test_ds,
   vqgan=vqgan,
-  discriminator=discriminator,
-  vqgan_opt=vqgan_opt,
-  disc_opt=disc_opt,
+  disc=discriminator,
   N_STEPS=N_STEPS,
   device=DEVICE,
   logger=LOGGER,
