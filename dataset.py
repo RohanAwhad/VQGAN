@@ -5,8 +5,6 @@ import random
 import torch
 
 from abc import ABC, abstractmethod
-from datasets import load_dataset
-from torchvision.transforms import v2
 
 class Dataset(ABC):
   @abstractmethod
