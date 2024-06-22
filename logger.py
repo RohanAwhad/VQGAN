@@ -1,6 +1,12 @@
 import wandb
+from abc import ABC, abstractmethod
 
-class WandbLogger:
+class Logger(ABC):
+  @abstractmethod
+  def log(self, data: dict, step: int):
+    pass
+
+class WandbLogger(Logger):
   def __init__(self, project_name, run_name):
     self.run = wandb.init(project=project_name, name=run_name)
 
@@ -8,7 +14,7 @@ class WandbLogger:
     self.run.log(data, step=step)
 
 
-class ConsoleLogger:
+class ConsoleLogger(Logger):
   def __init__(self, project_name, run_name):
     pass
 
