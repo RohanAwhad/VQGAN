@@ -159,7 +159,7 @@ def run(config: EngineConfig):
 
       with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
         fake_img, _, commitment_loss = config.vqgan(images)
-        disc_out = config.disc(fake_img).flatten(0, 2)
+        disc_out = config.disc(fake_img).flatten(0, 2).detach()  # detach to avoid backprop into discriminator
 
         # reconstruction_loss = get_perceptual_loss(fake_img, images)
         reconstruction_loss = ((fake_img - images) ** 2).mean()
@@ -167,28 +167,30 @@ def run(config: EngineConfig):
         lambda_ = calculate_lambda(reconstruction_loss, gan_loss, raw_vqgan.generator.deconv1)
         gen_loss = lambda_ * gan_loss + reconstruction_loss + commitment_loss
         gen_loss = gen_loss / config.grad_accum_steps
+      # if ddp, sync gradients on last micro_step
+      if config.is_ddp: config.vqgan.require_backward_grad_sync = (micro_step == config.grad_accum_steps - 1)
+      gen_loss.backward()
 
+      with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
+        with torch.no_grad(): fake_img, _, commitment_loss = config.vqgan(images)  # recompute fake_img because retain_graph=True doesn't work with ddp
+        disc_out = config.disc(fake_img).flatten(0, 2)
         real_img_disc_out = config.disc(images).flatten(0, 2)
 
         y_hat = torch.cat([real_img_disc_out, disc_out])
         y_true = torch.cat([torch.ones_like(real_img_disc_out), torch.zeros_like(disc_out)])
         disc_loss = F.binary_cross_entropy_with_logits(y_hat, y_true) / 2
         disc_loss = disc_loss / config.grad_accum_steps
-
-        # log
-        log_data['disc']['total_loss'] += disc_loss.detach()
-        log_data['gen']['total_loss'] += gen_loss.detach()
-        log_data['gen']['commitment_loss'] += commitment_loss.detach()
-        log_data['gen']['reconstruction_loss'] += reconstruction_loss.detach()
-        log_data['gen']['lambda_'] += (lambda_.detach() / config.grad_accum_steps)
-        log_data['gen']['gan_loss'] += gan_loss.detach()
-
-      if config.is_ddp:  # if ddp, sync gradients on last micro_step
-        config.vqgan.require_backward_grad_sync = (micro_step == config.grad_accum_steps - 1)
-        config.disc.require_backward_grad_sync = (micro_step == config.grad_accum_steps - 1)
-
-      gen_loss.backward(retain_graph=True)
+      # if ddp, sync gradients on last micro_step
+      if config.is_ddp: config.disc.require_backward_grad_sync = (micro_step == config.grad_accum_steps - 1)
       disc_loss.backward()
+
+      # log
+      log_data['disc']['total_loss'] += disc_loss.detach()
+      log_data['gen']['total_loss'] += gen_loss.detach()
+      log_data['gen']['commitment_loss'] += commitment_loss.detach()
+      log_data['gen']['reconstruction_loss'] += reconstruction_loss.detach()
+      log_data['gen']['lambda_'] += (lambda_.detach() / config.grad_accum_steps)
+      log_data['gen']['gan_loss'] += gan_loss.detach()
 
     lr = config.lr_scheduler.get_lr(step)
     for param_group in vqgan_opt.param_groups: param_group['lr'] = lr
