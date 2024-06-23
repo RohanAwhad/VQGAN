@@ -66,7 +66,9 @@ class ImageNetDatasetLoaderLite(Dataset):
     return {'images': batch}
 
   def next_batch(self):
-    if len(self.prefetch_queue) == 0: return self._next_batch()
+    while len(self.prefetch_queue) == 0:
+      time.sleep(0.25) # wait for the prefetch queue to at least have one batch
+
     return self.prefetch_queue.popleft()
 
 
