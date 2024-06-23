@@ -22,7 +22,7 @@ TRANSFORM = v2.Compose([
   v2.Resize(224)
 ])
 
-SHARD_SIZE = 2000
+SHARD_SIZE = 2000 * 5 # 2000 img ~1GB so 5GB per shard
 
 # ===
 # Utils
