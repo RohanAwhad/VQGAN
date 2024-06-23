@@ -42,11 +42,11 @@ class ImageNetDatasetLoaderLite(Dataset):
     self.step = self.batch_size * self.world_size
     assert self.step <= self.shard_size, "Batch size * world size must be less than or equal to shard size"
 
-    if not self.use_worker:
-      self.next_batch = self._next_batch
-    else:
-      self.next_batch = self._next_batch_from_queue
     self.reset()
+
+  def next_batch(self):
+    if self.use_worker: return self._next_batch_from_queue()
+    return self._next_batch()
 
   def _get_shard_size(self): return self.load_shard(0).shape[0]
 
