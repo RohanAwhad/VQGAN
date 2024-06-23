@@ -72,7 +72,7 @@ SAVE_MODEL = args.save_model
 PROJECT_NAME = args.project_name
 RUN_NAME = args.run_name
 
-WARMUP_STEPS = min(5000, N_STEPS//10)
+WARMUP_STEPS = min(820, N_STEPS//10)  # 820 ~1/3rd epoch
 MAX_STEPS = WARMUP_STEPS + (N_STEPS // 3)
 MAX_LR = LR
 MIN_LR = LR / 10
@@ -96,7 +96,7 @@ else:
 torch.manual_seed(1234)  # setting seed because we are using DDP
 if torch.cuda.is_available(): torch.cuda.manual_seed(1234)
 
-train_ds = ImageNetDatasetLoaderLite(split='train', batch_size=MICRO_BATCH_SIZE, root=DATA_DIR, process_rank=ddp_rank, world_size=ddp_world_size, prefetch_size=PREFETCH_SIZE)
+train_ds = ImageNetDatasetLoaderLite(split='train', batch_size=MICRO_BATCH_SIZE, root=DATA_DIR, process_rank=ddp_rank, world_size=ddp_world_size, prefetch_size=PREFETCH_SIZE, use_worker=True)
 test_ds = ImageNetDatasetLoaderLite(split='test', batch_size=MICRO_BATCH_SIZE, root=DATA_DIR, process_rank=ddp_rank, world_size=ddp_world_size, prefetch_size=1)
 
 codebook = Codebook(num_embeddings=NUM_EMBEDDINGS, embedding_dim=2048)  # 2048 is the output dim of the encoder
