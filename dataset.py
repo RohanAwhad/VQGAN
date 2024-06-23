@@ -1,5 +1,5 @@
 import glob
-import multiprocessing
+import multiprocessing as mp
 import os
 import pickle
 import random
@@ -7,8 +7,9 @@ import threading
 import time
 import torch
 
-from collections import deque
 from abc import ABC, abstractmethod
+from collections import deque
+from typing import Optional
 
 class Dataset(ABC):
   @abstractmethod
@@ -20,66 +21,85 @@ class Dataset(ABC):
     pass
 
 class ImageNetDatasetLoaderLite(Dataset):
-  def __init__(self, root: str, split: str, batch_size: int, process_rank: int, num_processes: int, prefetch_size: int = 1):
+  def __init__(self, root: str, split: str, batch_size: int, process_rank: int, world_size: int, use_worker: bool = False, prefetch_size: int = 1):
     self.root = root
     self.batch_size = batch_size
     self.split = split
     self.process_rank = process_rank
-    self.num_processes = num_processes
+    self.world_size = world_size
 
     self.files = glob.glob(os.path.join(root, f'{split}_*.pkl'))
+    self.shard_size = self._get_shard_size()
     self.curr_file_ptr = None
+    
+    # multiprocessing
+    self.use_worker = use_worker
     self.prefetch_size = prefetch_size
+    self.workers: list[mp.Process] = []
     self.prefetch_thread = None
+
+    self.offset = self.batch_size * self.process_rank
+    self.step = self.batch_size * self.world_size
+    assert self.step <= self.shard_size, "Batch size * world size must be less than or equal to shard size"
+
+    if not self.use_worker:
+      self.next_batch = self._next_batch
+    else:
+      self.next_batch = self._next_batch_from_queue
     self.reset()
 
+  def _get_shard_size(self): return self.load_shard(0).shape[0]
+
+  def load_shard(self, file_ptr):
+    with open(self.files[file_ptr], 'rb') as f:
+      return pickle.load(f)
+
+  def _next_batch(self):
+    batch = torch.from_numpy(self.curr_shard[self.curr_idx:self.curr_idx+self.batch_size])
+    self.curr_idx += self.step
+    # drop last batch if it's smaller than batch_size
+    if (self.curr_idx + self.step) >= len(self.curr_shard):
+      self.curr_file_ptr = (self.curr_file_ptr + 1) % len(self.files)  # cycle through files if necessary
+      self.curr_idx = self.offset
+      self.curr_shard = self.load_shard(self.curr_file_ptr)
+    
+    return {'images': batch}
+
   def reset(self):
+    if not self.use_worker:
+      if self.curr_file_ptr is None or self.curr_file_ptr != 0:  # loading shard is costly, and this op is common during overfitting or hyperparameter tuning
+        self.curr_file_ptr = 0
+        self.curr_shard = self.load_shard(self.curr_file_ptr)
+      self.curr_idx = self.offset
+
+    else:
+      # for efficiency reasons, we build a queue to prefetch batches
+      self.prefetch_queue = mp.Queue(maxsize=self.prefetch_size)
+      if len(self.workers) > 0:
+        for worker in self.workers:
+          worker.terminate()
+          worker.close()
+      self.workers = []
+      worker = mp.Process(target=self.worker)
+      worker.start()
+      self.workers.append(worker)
+
+
+  def worker(self):
     if self.curr_file_ptr is None or self.curr_file_ptr != 0:  # loading shard is costly, and this op is common during overfitting or hyperparameter tuning
       self.curr_file_ptr = 0
-      self.load_shard()
-    self.curr_idx = self.batch_size * self.process_rank
-
-    # for efficiency reasons, we build a queue to prefetch batches
-    # self.prefetch_queue = deque(maxlen=self.prefetch_size)
-    self.prefetch_queue = multiprocessing.Queue(maxsize=self.prefetch_size)
-    if self.prefetch_thread is None:
-      self.prefetch_thread = multiprocessing.Process(target=self._fill_queue)
-      self.prefetch_thread.start()
+      self.curr_shard = self.load_shard(self.curr_file_ptr)
+    self.curr_idx = self.offset
+    self._fill_queue()
 
   def _fill_queue(self):
     while True:
       # add a batch to the queue
-
-      # threading
-      # if len(self.prefetch_queue) < self.prefetch_size: self.prefetch_queue.append(self._next_batch())
-      #else: time.sleep(0.25)
-
       # multiprocessing
       if self.prefetch_queue.full(): time.sleep(0.25)
       else: self.prefetch_queue.put(self._next_batch())
 
-  def load_shard(self):
-    with open(self.files[self.curr_file_ptr], 'rb') as f:
-      self.curr_shard = pickle.load(f)
-
-  def _next_batch(self):
-    batch = torch.from_numpy(self.curr_shard[self.curr_idx:self.curr_idx+self.batch_size])
-    self.curr_idx += (self.batch_size * self.num_processes)
-    # drop last batch if it's smaller than batch_size
-    if (self.curr_idx + (self.batch_size * self.num_processes)) >= len(self.curr_shard):
-      self.curr_file_ptr = (self.curr_file_ptr + 1) % len(self.files)
-      self.curr_idx = self.batch_size * self.process_rank
-      self.load_shard()
-    
-    return {'images': batch}
-
-  def next_batch(self):
-    # threading
-    # while len(self.prefetch_queue) == 0:
-    #   time.sleep(0.25) # wait for the prefetch queue to at least have one batch
-
-    # return self.prefetch_queue.popleft()
-
+  def _next_batch_from_queue(self):
     # multiprocessing
     while self.prefetch_queue.empty():
       time.sleep(0.25)
