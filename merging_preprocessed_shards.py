@@ -15,7 +15,7 @@ def merge(split):
   shard_idx = 0
   for file in tqdm(train_files, desc=f'Merging {split} files'):
     with open(file, 'rb') as f:
-      new_train_shard.extend(pickle.load(f))
+      new_train_shard.append(pickle.load(f))
 
     if len(new_train_shard) > 5:
       new_train_shard = np.vstack(new_train_shard)
