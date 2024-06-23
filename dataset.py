@@ -45,10 +45,10 @@ class ImageNetDatasetLoaderLite(Dataset):
       self.prefetch_thread.start()
 
   def _fill_queue(self):
-    while len(self.prefetch_queue) < self.prefetch_size:
+    while True:
       # add a batch to the queue
-      self.prefetch_queue.append(self._next_batch())
-      time.sleep(0.25)
+      if len(self.prefetch_queue) < self.prefetch_size: self.prefetch_queue.append(self._next_batch())
+      else: time.sleep(0.25)
 
   def load_shard(self):
     with open(self.files[self.curr_file_ptr], 'rb') as f:
