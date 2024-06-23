@@ -224,11 +224,13 @@ class Discriminator(nn.Module):
     super().__init__()
 
     self.encoder = Encoder(dropout_rate)
+    self.act = nn.ReLU()
     self.dropout = nn.Dropout2d(p=dropout_rate)
     self.fc = nn.Linear(2048, 1)
   
   def forward(self, x):
     x = self.encoder(x)
+    x = self.act(x)
     x = self.dropout(x)
     x = self.fc(x.permute(0, 2, 3, 1))
     return x
