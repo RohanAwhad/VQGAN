@@ -188,7 +188,7 @@ def run(config: EngineConfig):
       with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
         turn_off_grad(config.vqgan)
         turn_on_grad(config.disc)
-        fake_img, _, commitment_loss = config.vqgan(images)  # recompute fake_img because retain_graph=True doesn't work with ddp
+        fake_img, _, _ = config.vqgan(images)  # recompute fake_img because retain_graph=True doesn't work with ddp
         disc_out = config.disc(fake_img).flatten(0, 2)
         real_img_disc_out = config.disc(images).flatten(0, 2)
 
