@@ -1,4 +1,5 @@
 import glob
+import multiprocessing
 import os
 import pickle
 import random
@@ -39,16 +40,23 @@ class ImageNetDatasetLoaderLite(Dataset):
     self.curr_idx = self.batch_size * self.process_rank
 
     # for efficiency reasons, we build a queue to prefetch batches
-    self.prefetch_queue = deque(maxlen=self.prefetch_size)
+    # self.prefetch_queue = deque(maxlen=self.prefetch_size)
+    self.prefetch_queue = multiprocessing.Queue(maxsize=self.prefetch_size)
     if self.prefetch_thread is None:
-      self.prefetch_thread = threading.Thread(target=self._fill_queue)
+      self.prefetch_thread = multiprocessing.Process(target=self._fill_queue)
       self.prefetch_thread.start()
 
   def _fill_queue(self):
     while True:
       # add a batch to the queue
-      if len(self.prefetch_queue) < self.prefetch_size: self.prefetch_queue.append(self._next_batch())
-      else: time.sleep(0.25)
+
+      # threading
+      # if len(self.prefetch_queue) < self.prefetch_size: self.prefetch_queue.append(self._next_batch())
+      #else: time.sleep(0.25)
+
+      # multiprocessing
+      if self.prefetch_queue.full(): time.sleep(0.25)
+      else: self.prefetch_queue.put(self._next_batch())
 
   def load_shard(self):
     with open(self.files[self.curr_file_ptr], 'rb') as f:
@@ -66,10 +74,16 @@ class ImageNetDatasetLoaderLite(Dataset):
     return {'images': batch}
 
   def next_batch(self):
-    while len(self.prefetch_queue) == 0:
-      time.sleep(0.25) # wait for the prefetch queue to at least have one batch
+    # threading
+    # while len(self.prefetch_queue) == 0:
+    #   time.sleep(0.25) # wait for the prefetch queue to at least have one batch
 
-    return self.prefetch_queue.popleft()
+    # return self.prefetch_queue.popleft()
+
+    # multiprocessing
+    while self.prefetch_queue.empty():
+      time.sleep(0.25)
+    return self.prefetch_queue.get()
 
 
 
