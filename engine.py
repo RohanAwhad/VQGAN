@@ -166,9 +166,9 @@ def run(config: EngineConfig):
       images = batch['images'].to(config.device)
 
       # train vqgan
+      turn_on_grad(config.vqgan)
+      turn_off_grad(config.disc)
       with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
-        turn_on_grad(config.vqgan)
-        turn_off_grad(config.disc)
         fake_img, _, commitment_loss = config.vqgan(images)
         disc_out = config.disc(fake_img).flatten(0, 2)
 
@@ -181,24 +181,34 @@ def run(config: EngineConfig):
         gen_loss = lambda_ * gan_loss + reconstruction_loss + commitment_loss
         gen_loss = gen_loss / config.grad_accum_steps
       # if ddp, sync gradients on last micro_step
-      if config.is_ddp: config.vqgan.require_backward_grad_sync = (micro_step == config.grad_accum_steps - 1)
+      print('grad accum steps:', config.grad_accum_steps)
+      if config.is_ddp:
+        config.vqgan.require_backward_grad_sync = micro_step == (config.grad_accum_steps - 1)
+        print('VQGAN require_backward_grad_sync:', config.vqgan.require_backward_grad_sync)
       gen_loss.backward()
 
       # train discriminator
-      with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
+      with torch.autograd.set_detect_anomaly(True):
         turn_off_grad(config.vqgan)
         turn_on_grad(config.disc)
-        fake_img, _, _ = config.vqgan(images)  # recompute fake_img because retain_graph=True doesn't work with ddp
-        disc_out = config.disc(fake_img).flatten(0, 2)
-        real_img_disc_out = config.disc(images).flatten(0, 2)
+        with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
+          fake_img, _, _ = config.vqgan(images)  # recompute fake_img because retain_graph=True doesn't work with ddp
+          disc_out = config.disc(fake_img).flatten(0, 2)
+          real_img_disc_out = config.disc(images).flatten(0, 2)
 
-        y_hat = torch.cat([real_img_disc_out, disc_out])
-        y_true = torch.cat([torch.ones_like(real_img_disc_out), torch.zeros_like(disc_out)])
-        disc_loss = F.binary_cross_entropy_with_logits(y_hat, y_true) / 2
-        disc_loss = disc_loss / config.grad_accum_steps
-      # if ddp, sync gradients on last micro_step
-      if config.is_ddp: config.disc.require_backward_grad_sync = (micro_step == config.grad_accum_steps - 1)
-      disc_loss.backward()
+          y_hat = torch.cat([real_img_disc_out, disc_out])
+          y_true = torch.cat([torch.ones_like(real_img_disc_out), torch.zeros_like(disc_out)])
+          disc_loss = F.binary_cross_entropy_with_logits(y_hat, y_true) / 2
+          disc_loss = disc_loss / config.grad_accum_steps
+        # if ddp, sync gradients on last micro_step
+        print('grad accum steps:', config.grad_accum_steps)
+        if config.is_ddp:
+          config.disc.require_backward_grad_sync = micro_step == (config.grad_accum_steps - 1)
+          print('DISC backward_grad_sync:', config.disc.require_backward_grad_sync)
+
+        print('executed till disc_loss. Now running backward()')
+        disc_loss.backward()
+        print('Backward executed')
 
       # log
       log_data['disc']['total_loss'] += disc_loss.detach()
@@ -208,6 +218,8 @@ def run(config: EngineConfig):
       log_data['gen']['lambda_'] += (lambda_ / config.grad_accum_steps)
       log_data['gen']['gan_loss'] += gan_loss.detach()
 
+    turn_on_grad(config.vqgan)
+    turn_on_grad(config.disc)
     lr = config.lr_scheduler.get_lr(step)
     for param_group in vqgan_opt.param_groups: param_group['lr'] = lr
     for param_group in disc_opt.param_groups: param_group['lr'] = lr

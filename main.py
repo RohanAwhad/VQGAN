@@ -23,6 +23,9 @@ if is_ddp:
   ddp_rank = int(os.environ['RANK'])
   ddp_local_rank = int(os.environ['LOCAL_RANK'])
   ddp_world_size = int(os.environ['WORLD_SIZE'])
+  print('DDP Rank:', ddp_rank)
+  print('DDP Local Rank:', ddp_local_rank)
+  print('DDP World Size:', ddp_world_size)
   DEVICE = f'cuda:{ddp_local_rank}'
   torch.cuda.set_device(DEVICE)
   is_master_process = ddp_rank == 0 # master process will do the logging, checkpointing, etc.
@@ -132,8 +135,8 @@ training_config = engine.EngineConfig(
   ddp_world_size=ddp_world_size,
   is_master_process=is_master_process,
 )
-with torch.autograd.set_detect_anomaly(True):
-  engine.run(training_config)
+#with torch.autograd.set_detect_anomaly(True):
+engine.run(training_config)
 
 if is_master_process:
   # save models
