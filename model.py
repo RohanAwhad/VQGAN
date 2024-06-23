@@ -42,7 +42,8 @@ class ConvBlock(nn.Module):
     if self.apply_act: self.act = nn.ReLU()
 
   def forward(self, x):
-    x = self.bn(self.conv(x))
+    x = self.conv(x)
+    x = self.bn(x)
     if self.apply_act: x = self.act(x)
     return x
 
@@ -135,7 +136,8 @@ class DeconvBlock(nn.Module):
         self.act = nn.ReLU()
 
   def forward(self, x):
-    x = self.bn(self.deconv(x))
+    x = self.deconv(x)
+    x = self.bn(x)
     if self.apply_act: x = self.act(x)
     return x
 

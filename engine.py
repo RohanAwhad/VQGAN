@@ -154,6 +154,7 @@ def run(config: EngineConfig):
     vqgan_opt.zero_grad()
     disc_opt.zero_grad()
     for micro_step in range(config.grad_accum_steps):
+      if config.is_master_process: print('Micro Step:', micro_step)
       batch = config.train_ds.next_batch()
       images = batch['images'].to(config.device)
 
@@ -191,7 +192,7 @@ def run(config: EngineConfig):
       log_data['gen']['total_loss'] += gen_loss.detach()
       log_data['gen']['commitment_loss'] += commitment_loss.detach()
       log_data['gen']['reconstruction_loss'] += reconstruction_loss.detach()
-      log_data['gen']['lambda_'] += (lambda_.detach() / config.grad_accum_steps)
+      log_data['gen']['lambda_'] += (lambda_ / config.grad_accum_steps)
       log_data['gen']['gan_loss'] += gan_loss.detach()
 
     lr = config.lr_scheduler.get_lr(step)

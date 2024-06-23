@@ -132,7 +132,8 @@ training_config = engine.EngineConfig(
   ddp_world_size=ddp_world_size,
   is_master_process=is_master_process,
 )
-engine.run(training_config)
+with torch.autograd.set_detect_anomaly(True):
+  engine.run(training_config)
 
 if is_master_process:
   # save models
