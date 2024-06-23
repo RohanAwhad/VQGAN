@@ -2,6 +2,7 @@ import dataclasses
 import inspect
 import math
 import matplotlib.pyplot as plt
+import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -149,6 +150,7 @@ def run(config: EngineConfig):
     start_step = 0
 
   for step in range(start_step, config.N_STEPS):
+    start = time.monotonic()
     log_data = dict(
       disc=dict(total_loss = 0.0),
       gen=dict(
@@ -231,6 +233,9 @@ def run(config: EngineConfig):
       dist.all_reduce(log_data['gen']['gan_loss'], op=dist.ReduceOp.AVG)
     if config.is_master_process: config.logger.log(log_data, step=step)
 
+    end = time.monotonic()
+    if config.is_master_process: print(f'Time taken for step {step}: {end-start:0.2f} secs')
+
     # periodically plot test images
     if step % 1000 == 0 and config.is_master_process:
 
@@ -268,7 +273,7 @@ def run(config: EngineConfig):
       plt.close()
 
     # periodically save model and optimizer state
-    if step % config.checkpoint_every == 0 and config.is_master_process:
+    if (step + 1) % config.checkpoint_every == 0 and config.is_master_process:
       with open(f'{config.checkpoint_dir}/last_step.txt', 'w') as f: f.write(str(step))
       torch.save(config.vqgan.state_dict(), f'{config.checkpoint_dir}/vqgan.pth')
       torch.save(config.disc.state_dict(), f'{config.checkpoint_dir}/disc.pth')

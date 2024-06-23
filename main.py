@@ -70,8 +70,8 @@ SAVE_MODEL = args.save_model
 PROJECT_NAME = args.project_name
 RUN_NAME = args.run_name
 
-WARMUP_STEPS = 5000
-MAX_STEPS = N_STEPS // 3
+WARMUP_STEPS = min(5000, N_STEPS//10)
+MAX_STEPS = WARMUP_STEPS + (N_STEPS // 3)
 MAX_LR = LR
 MIN_LR = LR / 10
 
@@ -79,12 +79,12 @@ GEN_LR = LR
 DISC_LR = LR
 
 MODEL_DIR = '/scratch/rawhad/VQGAN/models'
-if is_master_process:
-  os.makedirs(MODEL_DIR, exist_ok=True)
 
 if is_master_process:
-  #LOGGER = logger.WandbLogger(project_name=PROJECT_NAME, run_name=RUN_NAME)
-  LOGGER = logger.ConsoleLogger(project_name='vqgan', run_name='test-imagenet')
+  os.makedirs(MODEL_DIR, exist_ok=True)
+  LOGGER = logger.WandbLogger(project_name=PROJECT_NAME, run_name=RUN_NAME)
+  #LOGGER = logger.ConsoleLogger(project_name='vqgan', run_name='test-imagenet')
+  print('GRAD_ACCUM_STEPS: ', GRAD_ACCUM_STEPS)
 else:
   LOGGER = None
 
@@ -114,7 +114,9 @@ lr_scheduler = engine.CosineLRScheduler(WARMUP_STEPS, MAX_STEPS, MAX_LR, MIN_LR)
 # Unable to compile
 #vqgan = torch.compile(vqgan)
 #discriminator = torch.compile(discriminator)
+
 torch.set_float32_matmul_precision('high')
+torch.backends.cudnn.benchmark = True
 
 training_config = engine.EngineConfig(
   train_ds=train_ds,
