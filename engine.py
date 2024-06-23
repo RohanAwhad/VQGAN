@@ -101,6 +101,13 @@ class EngineConfig:
   is_master_process: bool
 
 
+def turn_off_grad(model: nn.Module):
+  for param in model.parameters(): param.requires_grad = False
+def turn_on_grad(model: nn.Module):
+  for param in model.parameters(): param.requires_grad = True
+
+
+
 def run(config: EngineConfig):
   device_type = 'cuda' if config.device.startswith('cuda') else config.device
 
@@ -158,9 +165,12 @@ def run(config: EngineConfig):
       batch = config.train_ds.next_batch()
       images = batch['images'].to(config.device)
 
+      # train vqgan
       with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
+        turn_on_grad(config.vqgan)
+        turn_off_grad(config.disc)
         fake_img, _, commitment_loss = config.vqgan(images)
-        disc_out = config.disc(fake_img).flatten(0, 2).detach()  # detach to avoid backprop into discriminator
+        disc_out = config.disc(fake_img).flatten(0, 2)
 
         # reconstruction_loss = get_perceptual_loss(fake_img, images)
         reconstruction_loss = ((fake_img - images) ** 2).mean()
@@ -174,8 +184,11 @@ def run(config: EngineConfig):
       if config.is_ddp: config.vqgan.require_backward_grad_sync = (micro_step == config.grad_accum_steps - 1)
       gen_loss.backward()
 
+      # train discriminator
       with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
-        with torch.no_grad(): fake_img, _, commitment_loss = config.vqgan(images)  # recompute fake_img because retain_graph=True doesn't work with ddp
+        turn_off_grad(config.vqgan)
+        turn_on_grad(config.disc)
+        fake_img, _, commitment_loss = config.vqgan(images)  # recompute fake_img because retain_graph=True doesn't work with ddp
         disc_out = config.disc(fake_img).flatten(0, 2)
         real_img_disc_out = config.disc(images).flatten(0, 2)
 
