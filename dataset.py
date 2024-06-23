@@ -2,8 +2,11 @@ import glob
 import os
 import pickle
 import random
+import threading
+import time
 import torch
 
+from collections import deque
 from abc import ABC, abstractmethod
 
 class Dataset(ABC):
@@ -16,7 +19,7 @@ class Dataset(ABC):
     pass
 
 class ImageNetDatasetLoaderLite(Dataset):
-  def __init__(self, root: str, split: str, batch_size: int, process_rank: int, num_processes: int):
+  def __init__(self, root: str, split: str, batch_size: int, process_rank: int, num_processes: int, prefetch_size: int = 1):
     self.root = root
     self.batch_size = batch_size
     self.split = split
@@ -25,6 +28,8 @@ class ImageNetDatasetLoaderLite(Dataset):
 
     self.files = glob.glob(os.path.join(root, f'{split}_*.pkl'))
     self.curr_file_ptr = None
+    self.prefetch_size = prefetch_size
+    self.prefetch_thread = None
     self.reset()
 
   def reset(self):
@@ -33,11 +38,23 @@ class ImageNetDatasetLoaderLite(Dataset):
       self.load_shard()
     self.curr_idx = self.batch_size * self.process_rank
 
+    # for efficiency reasons, we build a queue to prefetch batches
+    self.prefetch_queue = deque(maxlen=self.prefetch_size)
+    if self.prefetch_thread is None:
+      self.prefetch_thread = threading.Thread(target=self._fill_queue)
+      self.prefetch_thread.start()
+
+  def _fill_queue(self):
+    while len(self.prefetch_queue) < self.prefetch_size:
+      # add a batch to the queue
+      self.prefetch_queue.append(self._next_batch())
+      time.sleep(0.25)
+
   def load_shard(self):
     with open(self.files[self.curr_file_ptr], 'rb') as f:
       self.curr_shard = pickle.load(f)
 
-  def next_batch(self):
+  def _next_batch(self):
     batch = torch.from_numpy(self.curr_shard[self.curr_idx:self.curr_idx+self.batch_size])
     self.curr_idx += (self.batch_size * self.num_processes)
     # drop last batch if it's smaller than batch_size
@@ -46,13 +63,11 @@ class ImageNetDatasetLoaderLite(Dataset):
       self.curr_idx = self.batch_size * self.process_rank
       self.load_shard()
     
-    # dropping last batch so commenting this out
-    # if len(batch) < self.batch_size:
-    #   remainder = self.batch_size - len(batch)
-    #   batch = torch.vstack((batch, torch.from_numpy(self.curr_shard[:remainder])))
-    #   self.curr_idx = remainder
-    
     return {'images': batch}
+
+  def next_batch(self):
+    if len(self.prefetch_queue) == 0: return self._next_batch()
+    return self.prefetch_queue.popleft()
 
 
 
