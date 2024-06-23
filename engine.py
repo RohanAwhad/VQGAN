@@ -114,9 +114,11 @@ def run(config: EngineConfig):
   config.vqgan.to(config.device)
   config.disc.to(config.device)
 
+  # was facing with batchnorm throwing errors in DDP because we had 2 forward passes and 1 backward.
+  # solved it by setting broadcast_buffer=False. Ref: https://github.com/pytorch/pytorch/issues/66504
   if config.is_ddp:
-    config.vqgan = nn.parallel.DistributedDataParallel(config.vqgan, device_ids=[config.ddp_local_rank])
-    config.disc = nn.parallel.DistributedDataParallel(config.disc, device_ids=[config.ddp_local_rank])
+    config.vqgan = nn.parallel.DistributedDataParallel(config.vqgan, device_ids=[config.ddp_local_rank], broadcast_buffers=False)
+    config.disc = nn.parallel.DistributedDataParallel(config.disc, device_ids=[config.ddp_local_rank], broadcast_buffers=False)
 
   raw_vqgan = config.vqgan.module if config.is_ddp else config.vqgan
   raw_disc = config.disc.module if config.is_ddp else config.disc
@@ -161,7 +163,6 @@ def run(config: EngineConfig):
     vqgan_opt.zero_grad()
     disc_opt.zero_grad()
     for micro_step in range(config.grad_accum_steps):
-      if config.is_master_process: print('Micro Step:', micro_step)
       batch = config.train_ds.next_batch()
       images = batch['images'].to(config.device)
 
@@ -181,10 +182,8 @@ def run(config: EngineConfig):
         gen_loss = lambda_ * gan_loss + reconstruction_loss + commitment_loss
         gen_loss = gen_loss / config.grad_accum_steps
       # if ddp, sync gradients on last micro_step
-      print('grad accum steps:', config.grad_accum_steps)
       if config.is_ddp:
         config.vqgan.require_backward_grad_sync = micro_step == (config.grad_accum_steps - 1)
-        print('VQGAN require_backward_grad_sync:', config.vqgan.require_backward_grad_sync)
       gen_loss.backward()
 
       # train discriminator
@@ -201,14 +200,9 @@ def run(config: EngineConfig):
           disc_loss = F.binary_cross_entropy_with_logits(y_hat, y_true) / 2
           disc_loss = disc_loss / config.grad_accum_steps
         # if ddp, sync gradients on last micro_step
-        print('grad accum steps:', config.grad_accum_steps)
         if config.is_ddp:
           config.disc.require_backward_grad_sync = micro_step == (config.grad_accum_steps - 1)
-          print('DISC backward_grad_sync:', config.disc.require_backward_grad_sync)
-
-        print('executed till disc_loss. Now running backward()')
         disc_loss.backward()
-        print('Backward executed')
 
       # log
       log_data['disc']['total_loss'] += disc_loss.detach()
@@ -233,7 +227,7 @@ def run(config: EngineConfig):
       dist.all_reduce(log_data['gen']['total_loss'], op=dist.ReduceOp.AVG)
       dist.all_reduce(log_data['gen']['commitment_loss'], op=dist.ReduceOp.AVG)
       dist.all_reduce(log_data['gen']['reconstruction_loss'], op=dist.ReduceOp.AVG)
-      dist.all_reduce(log_data['gen']['lambda_'], op=dist.ReduceOp.AVG)
+      #dist.all_reduce(log_data['gen']['lambda_'], op=dist.ReduceOp.AVG)
       dist.all_reduce(log_data['gen']['gan_loss'], op=dist.ReduceOp.AVG)
     if config.is_master_process: config.logger.log(log_data, step=step)
 
