@@ -50,9 +50,11 @@ argparser.add_argument('--n_steps', type=int, default=5000)
 argparser.add_argument('--num_embeddings', type=int, default=1024)
 argparser.add_argument('--dropout_rate', type=float, default=0.1)
 argparser.add_argument('--data_dir', type=str, default="/scratch/rawhad/datasets/preprocessed_tiny_imagenet")
+argparser.add_argument('--use_worker', action='store_true')
 argparser.add_argument('--prefetch_size', type=int, default=1)
 argparser.add_argument('--last_step', type=int, default=-1)
 argparser.add_argument('--save_model', action='store_true')
+argparser.add_argument('--do_overfit', action='store_true')
 argparser.add_argument('--project_name', type=str, default='vqgan')
 argparser.add_argument('--run_name', type=str, default='test-imagenet')
 args = argparser.parse_args()
@@ -66,11 +68,14 @@ GRAD_ACCUM_STEPS = TOTAL_BATCH_SIZE // (MICRO_BATCH_SIZE * ddp_world_size)
 N_STEPS = args.n_steps
 NUM_EMBEDDINGS = args.num_embeddings
 DROPOUT_RATE = args.dropout_rate
+USE_WORKER = args.use_worker
 PREFETCH_SIZE = args.prefetch_size
 DATA_DIR = args.data_dir
 SAVE_MODEL = args.save_model
 PROJECT_NAME = args.project_name
 RUN_NAME = args.run_name
+LAST_STEP = args.last_step
+DO_OVERFIT = args.overfit
 
 WARMUP_STEPS = min(820, N_STEPS//10)  # 820 ~1/3rd epoch
 MAX_STEPS = WARMUP_STEPS + (N_STEPS // 3)
@@ -96,7 +101,7 @@ else:
 torch.manual_seed(1234)  # setting seed because we are using DDP
 if torch.cuda.is_available(): torch.cuda.manual_seed(1234)
 
-train_ds = ImageNetDatasetLoaderLite(split='train', batch_size=MICRO_BATCH_SIZE, root=DATA_DIR, process_rank=ddp_rank, world_size=ddp_world_size, prefetch_size=PREFETCH_SIZE, use_worker=True)
+train_ds = ImageNetDatasetLoaderLite(split='train', batch_size=MICRO_BATCH_SIZE, root=DATA_DIR, process_rank=ddp_rank, world_size=ddp_world_size, prefetch_size=PREFETCH_SIZE, use_worker=USE_WORKER)
 test_ds = ImageNetDatasetLoaderLite(split='test', batch_size=MICRO_BATCH_SIZE, root=DATA_DIR, process_rank=ddp_rank, world_size=ddp_world_size, prefetch_size=1)
 
 codebook = Codebook(num_embeddings=NUM_EMBEDDINGS, embedding_dim=2048)  # 2048 is the output dim of the encoder
@@ -132,12 +137,13 @@ training_config = engine.EngineConfig(
   grad_accum_steps=GRAD_ACCUM_STEPS,
   checkpoint_every=1000,
   checkpoint_dir=MODEL_DIR,
-  last_step=args.last_step,
+  last_step=LAST_STEP,
   is_ddp=is_ddp,
   ddp_rank=ddp_rank,
   ddp_local_rank=ddp_local_rank,
   ddp_world_size=ddp_world_size,
   is_master_process=is_master_process,
+  do_overfit=DO_OVERFIT,
 )
 #with torch.autograd.set_detect_anomaly(True):
 engine.run(training_config)

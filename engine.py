@@ -101,6 +101,7 @@ class EngineConfig:
   ddp_local_rank: int
   ddp_world_size: int
   is_master_process: bool
+  do_overfit: bool
 
 
 def turn_off_grad(model: nn.Module):
@@ -151,14 +152,19 @@ def run(config: EngineConfig):
     vqgan_opt.load_state_dict(torch.load(f'{config.checkpoint_dir}/vqgan_opt.pth'))
     disc_opt.load_state_dict(torch.load(f'{config.checkpoint_dir}/disc_opt.pth'))
 
-  test_samples = config.test_ds.next_batch()
-  test_images = test_samples['images'].to(config.device)
+  if config.do_overfit:
+    test_samples = config.train_ds.next_batch()
+    test_images = test_samples['images'].to(config.device)
+  else:
+    test_samples = config.test_ds.next_batch()
+    test_images = test_samples['images'].to(config.device)
 
   if config.is_master_process: print("Training for steps:", config.N_STEPS)
   config.vqgan.train()
   config.disc.train()
 
   for step in range(start_step, config.N_STEPS):
+    if config.do_overfit: config.train_ds.reset()
     start = time.monotonic()
     log_data = dict(
       disc=dict(total_loss = 0.0),
