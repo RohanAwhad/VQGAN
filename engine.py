@@ -80,13 +80,6 @@ def calculate_lambda(perceptual_loss, gan_loss, gen_last_layer):
   lambda_ = torch.norm(perceptual_loss_grad) / (torch.norm(gan_loss_grad) + 1e-6)
   return torch.clamp(lambda_, 0, 1e4).detach()
 
-# ===
-# Normalization
-# ===
-DS_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
-DS_STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
-def normalize(x):
-  return (x - DS_MEAN) / DS_STD
 
 @dataclasses.dataclass
 class EngineConfig:
@@ -118,6 +111,11 @@ def turn_on_grad(model: nn.Module):
 
 
 def run(config: EngineConfig):
+  # Normalization
+  DS_MEAN = torch.tensor([0.485, 0.456, 0.406], device=config.device).view(1, 3, 1, 1)
+  DS_STD = torch.tensor([0.229, 0.224, 0.225], device=config.device).view(1, 3, 1, 1)
+  def normalize(x): return (x - DS_MEAN) / DS_STD
+
   device_type = 'cuda' if config.device.startswith('cuda') else config.device
 
   config.vqgan.to(config.device)
