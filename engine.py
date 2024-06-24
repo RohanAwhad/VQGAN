@@ -80,6 +80,14 @@ def calculate_lambda(perceptual_loss, gan_loss, gen_last_layer):
   lambda_ = torch.norm(perceptual_loss_grad) / (torch.norm(gan_loss_grad) + 1e-6)
   return torch.clamp(lambda_, 0, 1e4).detach()
 
+# ===
+# Normalization
+# ===
+DS_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+DS_STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+def normalize(x):
+  return (x - DS_MEAN) / DS_STD
+
 @dataclasses.dataclass
 class EngineConfig:
   train_ds: Dataset
@@ -121,6 +129,16 @@ def run(config: EngineConfig):
     config.vqgan = nn.parallel.DistributedDataParallel(config.vqgan, device_ids=[config.ddp_local_rank], broadcast_buffers=False)
     config.disc = nn.parallel.DistributedDataParallel(config.disc, device_ids=[config.ddp_local_rank], broadcast_buffers=False)
 
+  if config.last_step != -1:
+    print("Resuming training from step:", config.last_step)
+    # load model and optimizer state
+    config.vqgan.module.load_state_dict(torch.load(f'{config.checkpoint_dir}/vqgan.pth'))
+    config.disc.module.load_state_dict(torch.load(f'{config.checkpoint_dir}/disc.pth'))
+    with open(f'{config.checkpoint_dir}/last_step.txt', 'r') as f: start_step = int(f.read())
+  else:
+    if config.is_master_process: print("Starting training from scratch")
+    start_step = 0
+
   raw_vqgan = config.vqgan.module if config.is_ddp else config.vqgan
   raw_disc = config.disc.module if config.is_ddp else config.disc
 
@@ -130,24 +148,17 @@ def run(config: EngineConfig):
   vqgan_opt.zero_grad()
   disc_opt.zero_grad()
 
+  if config.last_step != -1:
+    # load optimizer state
+    vqgan_opt.load_state_dict(torch.load(f'{config.checkpoint_dir}/vqgan_opt.pth'))
+    disc_opt.load_state_dict(torch.load(f'{config.checkpoint_dir}/disc_opt.pth'))
+
   test_samples = config.test_ds.next_batch()
   test_images = test_samples['images'].to(config.device)
 
   if config.is_master_process: print("Training for steps:", config.N_STEPS)
   config.vqgan.train()
   config.disc.train()
-
-  if config.last_step != -1:
-    print("Resuming training from step:", config.last_step)
-    # load model and optimizer state
-    config.vqgan.load_state_dict(torch.load(f'{config.checkpoint_dir}/vqgan.pth'))
-    config.disc.load_state_dict(torch.load(f'{config.checkpoint_dir}/disc.pth'))
-    vqgan_opt.load_state_dict(torch.load(f'{config.checkpoint_dir}/vqgan_opt.pth'))
-    disc_opt.load_state_dict(torch.load(f'{config.checkpoint_dir}/disc_opt.pth'))
-    with open(f'{config.checkpoint_dir}/last_step.txt', 'r') as f: start_step = int(f.read())
-  else:
-    if config.is_master_process: print("Starting training from scratch")
-    start_step = 0
 
   for step in range(start_step, config.N_STEPS):
     start = time.monotonic()
@@ -173,7 +184,7 @@ def run(config: EngineConfig):
       turn_off_grad(config.disc)
       with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
         fake_img, _, commitment_loss = config.vqgan(images)
-        disc_out = config.disc(fake_img).flatten(0, 2)
+        disc_out = config.disc(normalize(fake_img)).flatten(0, 2)
 
         # reconstruction_loss = get_perceptual_loss(fake_img, images)
         reconstruction_loss = ((fake_img - images) ** 2).mean()
@@ -194,8 +205,8 @@ def run(config: EngineConfig):
         turn_on_grad(config.disc)
         with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
           fake_img, _, _ = config.vqgan(images)  # recompute fake_img because retain_graph=True doesn't work with ddp
-          disc_out = config.disc(fake_img).flatten(0, 2)
-          real_img_disc_out = config.disc(images).flatten(0, 2)
+          disc_out = config.disc(normalize(fake_img)).flatten(0, 2)
+          real_img_disc_out = config.disc(normalize(images)).flatten(0, 2)
 
           y_hat = torch.cat([real_img_disc_out, disc_out])
           y_true = torch.cat([torch.ones_like(real_img_disc_out), torch.zeros_like(disc_out)])
@@ -275,7 +286,7 @@ def run(config: EngineConfig):
     # periodically save model and optimizer state
     if (step + 1) % config.checkpoint_every == 0 and config.is_master_process:
       with open(f'{config.checkpoint_dir}/last_step.txt', 'w') as f: f.write(str(step))
-      torch.save(config.vqgan.state_dict(), f'{config.checkpoint_dir}/vqgan.pth')
-      torch.save(config.disc.state_dict(), f'{config.checkpoint_dir}/disc.pth')
+      torch.save(raw_vqgan.state_dict(), f'{config.checkpoint_dir}/vqgan.pth')
+      torch.save(raw_disc.state_dict(), f'{config.checkpoint_dir}/disc.pth')
       torch.save(vqgan_opt.state_dict(), f'{config.checkpoint_dir}/vqgan_opt.pth')
       torch.save(disc_opt.state_dict(), f'{config.checkpoint_dir}/disc_opt.pth')
