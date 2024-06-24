@@ -22,6 +22,7 @@ class Dataset(ABC):
 
 class ImageNetDatasetLoaderLite(Dataset):
   def __init__(self, root: str, split: str, batch_size: int, process_rank: int, world_size: int, use_worker: bool = False, prefetch_size: int = 1):
+    # TODO (rohan): move this to imagenet_preprocessor.py
     self.ds_mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
     self.ds_std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
 
