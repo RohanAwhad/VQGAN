@@ -6,3 +6,4 @@ models
 wandb
 *.pkl
 slurm.*
+*.numbers
