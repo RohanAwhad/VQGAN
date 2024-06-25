@@ -75,10 +75,10 @@ SAVE_MODEL = args.save_model
 PROJECT_NAME = args.project_name
 RUN_NAME = args.run_name
 LAST_STEP = args.last_step
-DO_OVERFIT = args.overfit
+DO_OVERFIT = args.do_overfit
 
-WARMUP_STEPS = min(820, N_STEPS//10)  # 820 ~1/3rd epoch
-MAX_STEPS = WARMUP_STEPS + (N_STEPS // 3)
+MAX_STEPS = min(N_STEPS // 3, 2408) if DO_OVERFIT else 2408 # ~1epoch
+WARMUP_STEPS = int(MAX_STEPS * 0.037) # based on build_nanogpt ratio
 MAX_LR = LR
 MIN_LR = LR / 10
 

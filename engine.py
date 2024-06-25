@@ -112,10 +112,7 @@ def turn_on_grad(model: nn.Module):
 
 
 def run(config: EngineConfig):
-  # Normalization
-  DS_MEAN = torch.tensor([0.485, 0.456, 0.406], device=config.device).view(1, 3, 1, 1)
-  DS_STD = torch.tensor([0.229, 0.224, 0.225], device=config.device).view(1, 3, 1, 1)
-  def normalize(x): return (x - DS_MEAN) / DS_STD
+  PLOT_EVERY = 100 if config.do_overfit else 1000
 
   device_type = 'cuda' if config.device.startswith('cuda') else config.device
 
@@ -188,14 +185,14 @@ def run(config: EngineConfig):
       turn_off_grad(config.disc)
       with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
         fake_img, _, commitment_loss = config.vqgan(images)
-        disc_out = config.disc(normalize(fake_img)).flatten(0, 2)
+        disc_out = config.disc(fake_img).flatten(0, 2)
 
         # reconstruction_loss = get_perceptual_loss(fake_img, images)
         reconstruction_loss = ((fake_img - images) ** 2).mean()
         gan_loss = F.binary_cross_entropy_with_logits(disc_out, torch.zeros_like(disc_out))
-        #lambda_ = calculate_lambda(reconstruction_loss, gan_loss, raw_vqgan.generator.deconv1)
+        lambda_ = calculate_lambda(reconstruction_loss, gan_loss, raw_vqgan.generator.deconv1)
         # lambda as a constant
-        lambda_ = 1.0
+        #lambda_ = 1.0
         gen_loss = lambda_ * gan_loss + reconstruction_loss + commitment_loss
         gen_loss = gen_loss / config.grad_accum_steps
       # if ddp, sync gradients on last micro_step
@@ -209,8 +206,8 @@ def run(config: EngineConfig):
         turn_on_grad(config.disc)
         with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
           fake_img, _, _ = config.vqgan(images)  # recompute fake_img because retain_graph=True doesn't work with ddp
-          disc_out = config.disc(normalize(fake_img)).flatten(0, 2)
-          real_img_disc_out = config.disc(normalize(images)).flatten(0, 2)
+          disc_out = config.disc(fake_img).flatten(0, 2)
+          real_img_disc_out = config.disc(images).flatten(0, 2)
 
           y_hat = torch.cat([real_img_disc_out, disc_out])
           y_true = torch.cat([torch.ones_like(real_img_disc_out), torch.zeros_like(disc_out)])
@@ -244,15 +241,15 @@ def run(config: EngineConfig):
       dist.all_reduce(log_data['gen']['total_loss'], op=dist.ReduceOp.AVG)
       dist.all_reduce(log_data['gen']['commitment_loss'], op=dist.ReduceOp.AVG)
       dist.all_reduce(log_data['gen']['reconstruction_loss'], op=dist.ReduceOp.AVG)
-      #dist.all_reduce(log_data['gen']['lambda_'], op=dist.ReduceOp.AVG)
       dist.all_reduce(log_data['gen']['gan_loss'], op=dist.ReduceOp.AVG)
+      if isinstance(log_data['gen']['lambda_'], torch.Tensor): dist.all_reduce(log_data['gen']['lambda_'], op=dist.ReduceOp.AVG)
     if config.is_master_process: config.logger.log(log_data, step=step)
 
     end = time.monotonic()
     if config.is_master_process: print(f'Time taken for step {step}: {end-start:0.2f} secs')
 
     # periodically plot test images
-    if step % 1000 == 0 and config.is_master_process:
+    if step % PLOT_EVERY == 0 and config.is_master_process:
 
       with torch.no_grad():
         config.vqgan.eval()
@@ -265,10 +262,11 @@ def run(config: EngineConfig):
       batch_size, n_channels, img_h, img_w = img.shape
       _n_cols = int(math.sqrt(batch_size)) + 1
 
-      img = F.interpolate(img, (32, 32)).permute(0, 2, 3, 1).detach().cpu().numpy()
-      resized_test_images = F.interpolate(test_images, (32, 32)).permute(0, 2, 3, 1).detach().cpu().numpy()
+      img_size = (32, 32)
+      img = F.interpolate(img, img_size).permute(0, 2, 3, 1).detach().cpu().numpy()
+      resized_test_images = F.interpolate(test_images, img_size).permute(0, 2, 3, 1).detach().cpu().numpy()
 
-      fig, axs = plt.subplots(_n_cols * 2, _n_cols)
+      fig, axs = plt.subplots(_n_cols * 2, _n_cols, figsize=(2 * _n_cols, 4 * _n_cols))
       for a in range(_n_cols * 2):
         for b in range(_n_cols):
           idx = (a % _n_cols) * _n_cols + b
