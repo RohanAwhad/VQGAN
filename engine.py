@@ -10,6 +10,7 @@ import torch.distributed as dist
 
 from dataset import Dataset
 from logger import Logger
+from lpips import LPIPS
 
 # ===
 # Configure Optimizer
@@ -78,7 +79,14 @@ def calculate_lambda(perceptual_loss, gan_loss, gen_last_layer):
   perceptual_loss_grad = torch.autograd.grad(perceptual_loss, last_layer_weight, retain_graph=True)[0]
   gan_loss_grad = torch.autograd.grad(gan_loss, last_layer_weight, retain_graph=True)[0]
   lambda_ = torch.norm(perceptual_loss_grad) / (torch.norm(gan_loss_grad) + 1e-6)
-  return torch.clamp(lambda_, 0, 1e4).detach()
+  return torch.clamp(lambda_, 0, 1e4).detach() * 0.8
+
+
+# adopt_weight
+def adopt_weight(step, threshold):
+  if step < threshold: return 0.0
+  return 1.0
+
 
 
 @dataclasses.dataclass
@@ -88,6 +96,7 @@ class EngineConfig:
   vqgan: nn.Module
   disc: nn.Module
   N_STEPS: int
+  disc_factor_threshold: int
   device: str
   logger: Logger
   lr_scheduler: CosineLRScheduler
@@ -102,17 +111,57 @@ class EngineConfig:
   ddp_world_size: int
   is_master_process: bool
   do_overfit: bool
+  save_model: bool
 
 
 def turn_off_grad(model: nn.Module):
   for param in model.parameters(): param.requires_grad = False
+
 def turn_on_grad(model: nn.Module):
   for param in model.parameters(): param.requires_grad = True
 
 
+def get_gen_loss(config: EngineConfig, images: torch.Tensor, raw_vqgan: nn.Module, step: int, perceptual_criterion: LPIPS):
+  fake_img, _, commitment_loss = config.vqgan(images)
+  disc_out = config.disc(fake_img).flatten(0, 2)
+
+  perceptual_loss = perceptual_criterion(images, fake_img)
+  # reconstruction_loss = ((fake_img - images) ** 2).mean()
+  reconstruction_loss = torch.abs(fake_img - images)
+  perceptual_reconstruction_loss = (perceptual_loss + reconstruction_loss).mean()
+  # gan_loss = F.binary_cross_entropy_with_logits(disc_out, torch.zeros_like(disc_out))
+  gan_loss = -torch.mean(disc_out)  # taken from dome272's vqgan repo
+  lambda_ = calculate_lambda(perceptual_reconstruction_loss, gan_loss, raw_vqgan.generator.layers[-1])
+  # lambda as a constant
+  #lambda_ = 1.0
+  disc_factor = 1.0 if step > config.disc_factor_threshold else 0.0
+  gen_loss = disc_factor * lambda_ * gan_loss + perceptual_reconstruction_loss + commitment_loss
+  gen_loss = gen_loss / config.grad_accum_steps
+  return gen_loss, commitment_loss, perceptual_reconstruction_loss, lambda_, gan_loss
+
+
+def get_disc_loss(config: EngineConfig, images: torch.Tensor, step: int):
+  fake_img, _, _ = config.vqgan(images)  # recompute fake_img because retain_graph=True doesn't work with ddp
+  disc_out = config.disc(fake_img).flatten(0, 2)
+  real_img_disc_out = config.disc(images).flatten(0, 2)
+
+  d_loss_real = torch.mean(F.relu(1.0 - real_img_disc_out))
+  d_loss_fake = torch.mean(F.relu(1.0 + disc_out))
+  disc_factor = 1.0 if step > config.disc_factor_threshold else 0.0
+  disc_loss = disc_factor * (d_loss_real + d_loss_fake) / 2
+
+  # y_hat = torch.cat([real_img_disc_out, disc_out])
+  # y_true = torch.cat([torch.ones_like(real_img_disc_out), torch.zeros_like(disc_out)])
+  # disc_loss = F.binary_cross_entropy_with_logits(y_hat, y_true) / 2
+
+  disc_loss = disc_loss / config.grad_accum_steps
+  return disc_loss
 
 def run(config: EngineConfig):
   PLOT_EVERY = 100 if config.do_overfit else 1000
+  perceptual_criterion = LPIPS()
+  perceptual_criterion.to(config.device)
+  perceptual_criterion.eval()
 
   device_type = 'cuda' if config.device.startswith('cuda') else config.device
 
@@ -149,12 +198,8 @@ def run(config: EngineConfig):
     vqgan_opt.load_state_dict(torch.load(f'{config.checkpoint_dir}/vqgan_opt.pth'))
     disc_opt.load_state_dict(torch.load(f'{config.checkpoint_dir}/disc_opt.pth'))
 
-  if config.do_overfit:
-    test_samples = config.train_ds.next_batch()
-    test_images = test_samples['images'].to(config.device)
-  else:
-    test_samples = config.test_ds.next_batch()
-    test_images = test_samples['images'].to(config.device)
+  test_samples = config.test_ds.next_batch()
+  test_images = test_samples['images'].to(config.device)
 
   if config.is_master_process: print("Training for steps:", config.N_STEPS)
   config.vqgan.train()
@@ -168,7 +213,7 @@ def run(config: EngineConfig):
       gen=dict(
         total_loss = 0.0,
         commitment_loss = 0.0,
-        reconstruction_loss = 0.0,
+        perceptual_reconstruction_loss = 0.0,
         lambda_ = 0.0,
         gan_loss = 0.0,
       )
@@ -183,46 +228,35 @@ def run(config: EngineConfig):
       # train vqgan
       turn_on_grad(config.vqgan)
       turn_off_grad(config.disc)
-      with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
-        fake_img, _, commitment_loss = config.vqgan(images)
-        disc_out = config.disc(fake_img).flatten(0, 2)
+      if device_type == 'cuda':
+        with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
+          gen_loss, commitment_loss, perceptual_reconstruction_loss, lambda_, gan_loss = get_gen_loss(config, images, raw_vqgan, step, perceptual_criterion)
+      else:
+        gen_loss, commitment_loss, perceptual_reconstruction_loss, lambda_, gan_loss = get_gen_loss(config, images, raw_vqgan, step, perceptual_criterion)
 
-        # reconstruction_loss = get_perceptual_loss(fake_img, images)
-        reconstruction_loss = ((fake_img - images) ** 2).mean()
-        gan_loss = F.binary_cross_entropy_with_logits(disc_out, torch.zeros_like(disc_out))
-        lambda_ = calculate_lambda(reconstruction_loss, gan_loss, raw_vqgan.generator.deconv1)
-        # lambda as a constant
-        #lambda_ = 1.0
-        gen_loss = lambda_ * gan_loss + reconstruction_loss + commitment_loss
-        gen_loss = gen_loss / config.grad_accum_steps
       # if ddp, sync gradients on last micro_step
       if config.is_ddp:
         config.vqgan.require_backward_grad_sync = micro_step == (config.grad_accum_steps - 1)
       gen_loss.backward()
 
       # train discriminator
-      with torch.autograd.set_detect_anomaly(True):
-        turn_off_grad(config.vqgan)
-        turn_on_grad(config.disc)
+      turn_off_grad(config.vqgan)
+      turn_on_grad(config.disc)
+      if device_type == 'cuda':
         with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
-          fake_img, _, _ = config.vqgan(images)  # recompute fake_img because retain_graph=True doesn't work with ddp
-          disc_out = config.disc(fake_img).flatten(0, 2)
-          real_img_disc_out = config.disc(images).flatten(0, 2)
-
-          y_hat = torch.cat([real_img_disc_out, disc_out])
-          y_true = torch.cat([torch.ones_like(real_img_disc_out), torch.zeros_like(disc_out)])
-          disc_loss = F.binary_cross_entropy_with_logits(y_hat, y_true) / 2
-          disc_loss = disc_loss / config.grad_accum_steps
-        # if ddp, sync gradients on last micro_step
-        if config.is_ddp:
-          config.disc.require_backward_grad_sync = micro_step == (config.grad_accum_steps - 1)
-        disc_loss.backward()
+          disc_loss = get_disc_loss(config, images, step)
+      else:
+        disc_loss = get_disc_loss(config, images, step)
+      # if ddp, sync gradients on last micro_step
+      if config.is_ddp:
+        config.disc.require_backward_grad_sync = micro_step == (config.grad_accum_steps - 1)
+      disc_loss.backward()
 
       # log
       log_data['disc']['total_loss'] += disc_loss.detach()
       log_data['gen']['total_loss'] += gen_loss.detach()
       log_data['gen']['commitment_loss'] += commitment_loss.detach()
-      log_data['gen']['reconstruction_loss'] += reconstruction_loss.detach()
+      log_data['gen']['perceptual_reconstruction_loss'] += perceptual_reconstruction_loss.detach()
       log_data['gen']['lambda_'] += (lambda_ / config.grad_accum_steps)
       log_data['gen']['gan_loss'] += gan_loss.detach()
 
@@ -240,7 +274,7 @@ def run(config: EngineConfig):
       dist.all_reduce(log_data['disc']['total_loss'], op=dist.ReduceOp.AVG)
       dist.all_reduce(log_data['gen']['total_loss'], op=dist.ReduceOp.AVG)
       dist.all_reduce(log_data['gen']['commitment_loss'], op=dist.ReduceOp.AVG)
-      dist.all_reduce(log_data['gen']['reconstruction_loss'], op=dist.ReduceOp.AVG)
+      dist.all_reduce(log_data['gen']['perceptual_reconstruction_loss'], op=dist.ReduceOp.AVG)
       dist.all_reduce(log_data['gen']['gan_loss'], op=dist.ReduceOp.AVG)
       if isinstance(log_data['gen']['lambda_'], torch.Tensor): dist.all_reduce(log_data['gen']['lambda_'], op=dist.ReduceOp.AVG)
     if config.is_master_process: config.logger.log(log_data, step=step)
@@ -286,7 +320,7 @@ def run(config: EngineConfig):
       plt.close()
 
     # periodically save model and optimizer state
-    if (step + 1) % config.checkpoint_every == 0 and config.is_master_process:
+    if (step + 1) % config.checkpoint_every == 0 and config.is_master_process and config.save_model:
       with open(f'{config.checkpoint_dir}/last_step.txt', 'w') as f: f.write(str(step))
       torch.save(raw_vqgan.state_dict(), f'{config.checkpoint_dir}/vqgan.pth')
       torch.save(raw_disc.state_dict(), f'{config.checkpoint_dir}/disc.pth')

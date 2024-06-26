@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 N_GROUPS = 32
-DROPOUT_RATE = 0.1
+START_CHANNEL = 64
 
 class Upsample(nn.Module):
   def __init__(self, in_channels):
@@ -17,7 +17,7 @@ class Upsample(nn.Module):
 class Downsample(nn.Module):
   def __init__(self, in_channels):
     super().__init__()
-    self.conv = nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=1, padding=1)
+    self.conv = nn.Conv2d(in_channels, in_channels, kernel_size=3, stride=2, padding=0)
 
   def forward(self, x: torch.Tensor):
     pad = (0, 1, 0, 1)
@@ -85,6 +85,7 @@ class Codebook(nn.Module):
     self.embedding_dim = embedding_dim
     self.embedding = nn.Embedding(num_embeddings, embedding_dim)  # QA (rohan): if we are detaching the q, down below, are we training these embeddings?
     self.embedding.weight.data.uniform_(-1/num_embeddings, 1/num_embeddings)
+    self.beta = 0.25
 
   def forward(self, x: torch.Tensor):
     batch_size, embed_dim, n_rows, n_cols = x.shape
@@ -100,7 +101,7 @@ class Codebook(nn.Module):
     q = self.embedding(indices)
 
     # loss
-    loss = torch.mean((x.detach() - q)**2) + torch.mean((x - q.detach())**2)
+    loss = torch.mean((x - q.detach())**2) + self.beta * torch.mean((x.detach() - q)**2)
 
     out: torch.Tensor = x + (q - x).detach()
     out = out.view(batch_size, n_rows, n_cols, embed_dim).permute(0, 3, 1, 2).contiguous()
@@ -109,10 +110,10 @@ class Codebook(nn.Module):
 
 # Number of layers and rough idea of the architecture is referenced from: https://github.com/dome272/VQGAN-pytorch
 class Encoder(nn.Module):
-  def __init__(self, in_channels, out_channels, m: int):
+  def __init__(self, in_channels, out_channels, m: int, dropout_rate: float):
     super().__init__()
     ch_mult = list(map(lambda x: 2**x, range(m)))
-    self.start_channel = 16
+    self.start_channel = START_CHANNEL
     self.in_channels = in_channels
     self.out_channels = out_channels
     self.m = m
@@ -125,8 +126,9 @@ class Encoder(nn.Module):
       layers.append(nn.Sequential(
         ResidualBlock(in_channel, out_channel),
         ResidualBlock(out_channel, out_channel),
+        ResidualBlock(out_channel, out_channel),
         Downsample(out_channel),
-        nn.Dropout2d(DROPOUT_RATE),
+        nn.Dropout2d(dropout_rate),
       ))
       in_channel = out_channel
 
@@ -135,8 +137,9 @@ class Encoder(nn.Module):
     layers.append(ResidualBlock(in_channel, in_channel))
     layers.append(nn.GroupNorm(N_GROUPS, in_channel))
     layers.append(nn.SiLU())
-    layers.append(nn.Dropout2d(DROPOUT_RATE))
+    layers.append(nn.Dropout2d(dropout_rate))
     layers.append(nn.Conv2d(in_channel, out_channels, kernel_size=3, stride=1, padding=1))
+    layers.append(nn.Conv2d(out_channels, out_channels, kernel_size=1, stride=1, padding=0))  # pre-quant
     self.layers = nn.Sequential(*layers)
 
   def forward(self, x: torch.Tensor):
@@ -145,10 +148,10 @@ class Encoder(nn.Module):
 
 
 class Generator(nn.Module):
-  def __init__(self, in_channels, out_channels, m: int):
+  def __init__(self, in_channels, out_channels, m: int, dropout_rate: float):
     super().__init__()
-    ch_mult = list(reversed(map(lambda x: 2**x, range(m))))
-    self.start_channel = 16
+    ch_mult = list(map(lambda x: 2**x, reversed(range(m))))
+    self.start_channel = START_CHANNEL
 
     self.in_channels = in_channels
     self.out_channels = out_channels
@@ -156,11 +159,12 @@ class Generator(nn.Module):
 
     layers = []
     in_channel = self.start_channel * ch_mult[0]
+    layers.append(nn.Conv2d(self.in_channels, self.in_channels, kernel_size=1, stride=1, padding=0))  # post-quant
     layers.append(nn.Conv2d(self.in_channels, in_channel, kernel_size=3, stride=1, padding=1))
     layers.append(ResidualBlock(in_channel, in_channel))
     layers.append(AttentionBlock(in_channel))
     layers.append(ResidualBlock(in_channel, in_channel))
-    layers.append(nn.Dropout2d(DROPOUT_RATE))
+    layers.append(nn.Dropout2d(dropout_rate))
 
     # Res -> Res -> Up
     for ch_mul_factor in ch_mult:
@@ -170,13 +174,13 @@ class Generator(nn.Module):
         ResidualBlock(out_channel, out_channel),
         ResidualBlock(out_channel, out_channel),
         Upsample(out_channel),
-        nn.Dropout2d(DROPOUT_RATE),
+        nn.Dropout2d(dropout_rate),
       ))
       in_channel = out_channel
     
     layers.append(nn.GroupNorm(N_GROUPS, in_channel))
     layers.append(nn.SiLU())
-    layers.append(nn.Dropout2d(DROPOUT_RATE))
+    layers.append(nn.Dropout2d(dropout_rate))
     layers.append(nn.Conv2d(in_channel, self.out_channels, kernel_size=3, stride=1, padding=1))
 
     self.layers = nn.Sequential(*layers)
@@ -188,10 +192,10 @@ class Generator(nn.Module):
 PatchGAN Discriminator (https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/blob/master/models/networks.py#L538)
 """
 class Discriminator(nn.Module):
-  def __init__(self, args, num_filters_last=64, n_layers=3):
+  def __init__(self, in_channels, dropout_rate: float, num_filters_last=64, n_layers=3):
     super(Discriminator, self).__init__()
 
-    layers = [nn.Conv2d(args.image_channels, num_filters_last, 4, 2, 1), nn.LeakyReLU(0.2)]
+    layers = [nn.Conv2d(in_channels, num_filters_last, 4, 2, 1), nn.LeakyReLU(0.2)]
     num_filters_mult = 1
 
     for i in range(1, n_layers + 1):
@@ -207,7 +211,8 @@ class Discriminator(nn.Module):
           bias=False
         ),
         nn.BatchNorm2d(num_filters_last * num_filters_mult),
-        nn.LeakyReLU(0.2, True)
+        nn.LeakyReLU(0.2, True),
+        nn.Dropout2d(dropout_rate),
       ]
 
     layers.append(nn.Conv2d(num_filters_last * num_filters_mult, 1, 4, 1, 1))

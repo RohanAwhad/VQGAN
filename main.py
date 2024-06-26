@@ -6,8 +6,8 @@ import os
 import torch
 
 import engine, logger
-from dataset import ImageNetDatasetLoaderLite
-from model import Encoder, Generator, Discriminator, Codebook, VQGAN
+from dataset import ImageNetDatasetLoaderLite, MNISTDatasetLoaderLite, CIFAR10DatasetLoaderLite
+from new_model import Encoder, Generator, Discriminator, Codebook, VQGAN
 
 # ===
 # DDP setup
@@ -43,20 +43,21 @@ else:
 # Constants
 # ===
 argparser = argparse.ArgumentParser()
-argparser.add_argument('--lr', type=float, default=3e-4)
+argparser.add_argument('--lr', type=float, default=3e-5)
 argparser.add_argument('--batch_size', type=int, default=64)
 argparser.add_argument('--micro_batch_size', type=int, default=0)
-argparser.add_argument('--n_steps', type=int, default=5000)
-argparser.add_argument('--num_embeddings', type=int, default=1024)
+argparser.add_argument('--n_steps', type=int, default=10000)
+argparser.add_argument('--num_embeddings', type=int, default=4)
 argparser.add_argument('--dropout_rate', type=float, default=0.1)
-argparser.add_argument('--data_dir', type=str, default="/scratch/rawhad/datasets/preprocessed_tiny_imagenet")
+argparser.add_argument('--disc_factor_threshold', type=float, default=2000)
+argparser.add_argument('--data_dir', type=str, default="./data")
 argparser.add_argument('--use_worker', action='store_true')
 argparser.add_argument('--prefetch_size', type=int, default=1)
 argparser.add_argument('--last_step', type=int, default=-1)
 argparser.add_argument('--save_model', action='store_true')
 argparser.add_argument('--do_overfit', action='store_true')
-argparser.add_argument('--project_name', type=str, default='vqgan')
-argparser.add_argument('--run_name', type=str, default='test-imagenet')
+argparser.add_argument('--project_name', type=str, default='vqgan_hyperparam_search')
+argparser.add_argument('--run_name', type=str, default='run-2-test-cifar10-6')
 args = argparser.parse_args()
 
 LR = args.lr
@@ -76,6 +77,7 @@ PROJECT_NAME = args.project_name
 RUN_NAME = args.run_name
 LAST_STEP = args.last_step
 DO_OVERFIT = args.do_overfit
+DISC_FACTOR_THRESHOLD = args.disc_factor_threshold
 
 MAX_STEPS = min(N_STEPS // 3, 2408) if DO_OVERFIT else 2408 # ~1epoch
 WARMUP_STEPS = int(MAX_STEPS * 0.037) # based on build_nanogpt ratio
@@ -88,8 +90,9 @@ DISC_LR = LR
 MODEL_DIR = '/scratch/rawhad/VQGAN/models'
 
 if is_master_process:
-  os.makedirs(MODEL_DIR, exist_ok=True)
+  if SAVE_MODEL: os.makedirs(MODEL_DIR, exist_ok=True)
   LOGGER = logger.WandbLogger(project_name=PROJECT_NAME, run_name=RUN_NAME)
+  LOGGER.update_config(vars(args))
   #LOGGER = logger.ConsoleLogger(project_name='vqgan', run_name='test-imagenet')
   print('GRAD_ACCUM_STEPS: ', GRAD_ACCUM_STEPS)
 else:
@@ -101,13 +104,22 @@ else:
 torch.manual_seed(1234)  # setting seed because we are using DDP
 if torch.cuda.is_available(): torch.cuda.manual_seed(1234)
 
-train_ds = ImageNetDatasetLoaderLite(split='train', batch_size=MICRO_BATCH_SIZE, root=DATA_DIR, process_rank=ddp_rank, world_size=ddp_world_size, prefetch_size=PREFETCH_SIZE, use_worker=USE_WORKER)
-test_ds = ImageNetDatasetLoaderLite(split='test', batch_size=MICRO_BATCH_SIZE, root=DATA_DIR, process_rank=ddp_rank, world_size=ddp_world_size, prefetch_size=1)
+# train_ds = ImageNetDatasetLoaderLite(split='train', batch_size=MICRO_BATCH_SIZE, root=DATA_DIR, process_rank=ddp_rank, world_size=ddp_world_size, prefetch_size=PREFETCH_SIZE, use_worker=USE_WORKER)
+# if DO_OVERFIT: test_ds = train_ds
+# else: test_ds = ImageNetDatasetLoaderLite(split='test', batch_size=MICRO_BATCH_SIZE, root=DATA_DIR, process_rank=ddp_rank, world_size=ddp_world_size, prefetch_size=1)
 
-codebook = Codebook(num_embeddings=NUM_EMBEDDINGS, embedding_dim=2048)  # 2048 is the output dim of the encoder
-encoder = Encoder(DROPOUT_RATE)
-generator = Generator(DROPOUT_RATE)
-discriminator = Discriminator(DROPOUT_RATE)
+train_ds = MNISTDatasetLoaderLite(train=True, root=DATA_DIR, batch_size=MICRO_BATCH_SIZE, shuffle=True, download=False)
+test_ds = MNISTDatasetLoaderLite(train=False, root=DATA_DIR, batch_size=MICRO_BATCH_SIZE, shuffle=False, download=False)
+# train_ds = CIFAR10DatasetLoaderLite(train=True, root=DATA_DIR, batch_size=MICRO_BATCH_SIZE, shuffle=True, download=False)
+# test_ds = CIFAR10DatasetLoaderLite(train=True, root=DATA_DIR, batch_size=MICRO_BATCH_SIZE, shuffle=False, download=False)
+
+CODEBOOK_EMBED_DIM = 256
+IN_CHANNELS = 1
+
+codebook = Codebook(num_embeddings=NUM_EMBEDDINGS, embedding_dim=CODEBOOK_EMBED_DIM)  # 2048 is the output dim of the encoder
+encoder = Encoder(in_channels=IN_CHANNELS, out_channels=CODEBOOK_EMBED_DIM, m=2, dropout_rate=DROPOUT_RATE)
+generator = Generator(in_channels=CODEBOOK_EMBED_DIM, out_channels=IN_CHANNELS, m=2, dropout_rate=DROPOUT_RATE)
+discriminator = Discriminator(in_channels=IN_CHANNELS, num_filters_last=32, n_layers=2, dropout_rate=DROPOUT_RATE)
 vqgan = VQGAN(encoder, codebook, generator)
 
 # ===
@@ -131,6 +143,7 @@ training_config = engine.EngineConfig(
   vqgan=vqgan,
   disc=discriminator,
   N_STEPS=N_STEPS,
+  disc_factor_threshold=DISC_FACTOR_THRESHOLD,
   device=DEVICE,
   logger=LOGGER,
   lr_scheduler=lr_scheduler,
@@ -144,6 +157,7 @@ training_config = engine.EngineConfig(
   ddp_world_size=ddp_world_size,
   is_master_process=is_master_process,
   do_overfit=DO_OVERFIT,
+  save_model=SAVE_MODEL,
 )
 #with torch.autograd.set_detect_anomaly(True):
 engine.run(training_config)
