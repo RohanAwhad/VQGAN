@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-N_GROUPS = 32
+N_GROUPS = 64
 START_CHANNEL = 64
 
 class Upsample(nn.Module):
@@ -123,9 +123,14 @@ class Encoder(nn.Module):
     in_channel = self.start_channel
     for ch_mul_factor in ch_mult:
       out_channel = self.start_channel * ch_mul_factor
+      # layers.append(nn.Sequential(
+      #   ResidualBlock(in_channel, out_channel),
+      #   ResidualBlock(out_channel, out_channel),
+      #   nn.Dropout2d(dropout_rate),
+      # ))
+      # in_channel = out_channel
       layers.append(nn.Sequential(
         ResidualBlock(in_channel, out_channel),
-        ResidualBlock(out_channel, out_channel),
         ResidualBlock(out_channel, out_channel),
         Downsample(out_channel),
         nn.Dropout2d(dropout_rate),
@@ -139,7 +144,7 @@ class Encoder(nn.Module):
     layers.append(nn.SiLU())
     layers.append(nn.Dropout2d(dropout_rate))
     layers.append(nn.Conv2d(in_channel, out_channels, kernel_size=3, stride=1, padding=1))
-    layers.append(nn.Conv2d(out_channels, out_channels, kernel_size=1, stride=1, padding=0))  # pre-quant
+    # layers.append(nn.Conv2d(out_channels, out_channels, kernel_size=1, stride=1, padding=0))  # pre-quant
     self.layers = nn.Sequential(*layers)
 
   def forward(self, x: torch.Tensor):
@@ -159,7 +164,7 @@ class Generator(nn.Module):
 
     layers = []
     in_channel = self.start_channel * ch_mult[0]
-    layers.append(nn.Conv2d(self.in_channels, self.in_channels, kernel_size=1, stride=1, padding=0))  # post-quant
+    # layers.append(nn.Conv2d(self.in_channels, self.in_channels, kernel_size=1, stride=1, padding=0))  # post-quant
     layers.append(nn.Conv2d(self.in_channels, in_channel, kernel_size=3, stride=1, padding=1))
     layers.append(ResidualBlock(in_channel, in_channel))
     layers.append(AttentionBlock(in_channel))

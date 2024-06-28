@@ -158,7 +158,7 @@ def get_disc_loss(config: EngineConfig, images: torch.Tensor, step: int):
   return disc_loss
 
 def run(config: EngineConfig):
-  PLOT_EVERY = 100 if config.do_overfit else 1000
+  PLOT_EVERY = 100 if config.do_overfit else 100
   perceptual_criterion = LPIPS()
   perceptual_criterion.to(config.device)
   perceptual_criterion.eval()

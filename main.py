@@ -49,6 +49,8 @@ argparser.add_argument('--micro_batch_size', type=int, default=0)
 argparser.add_argument('--n_steps', type=int, default=10000)
 argparser.add_argument('--num_embeddings', type=int, default=4)
 argparser.add_argument('--dropout_rate', type=float, default=0.1)
+argparser.add_argument('--compression_factor', type=int, default=2)
+argparser.add_argument('--codebook_dim', type=int, default=32)
 argparser.add_argument('--disc_factor_threshold', type=float, default=2000)
 argparser.add_argument('--data_dir', type=str, default="./data")
 argparser.add_argument('--use_worker', action='store_true')
@@ -68,7 +70,9 @@ assert TOTAL_BATCH_SIZE % (MICRO_BATCH_SIZE * ddp_world_size) == 0, "Total batch
 GRAD_ACCUM_STEPS = TOTAL_BATCH_SIZE // (MICRO_BATCH_SIZE * ddp_world_size)
 N_STEPS = args.n_steps
 NUM_EMBEDDINGS = args.num_embeddings
+CODEBOOK_EMBED_DIM = args.codebook_dim
 DROPOUT_RATE = args.dropout_rate
+COMPRESSION_FACTOR = args.compression_factor
 USE_WORKER = args.use_worker
 PREFETCH_SIZE = args.prefetch_size
 DATA_DIR = args.data_dir
@@ -108,17 +112,16 @@ if torch.cuda.is_available(): torch.cuda.manual_seed(1234)
 # if DO_OVERFIT: test_ds = train_ds
 # else: test_ds = ImageNetDatasetLoaderLite(split='test', batch_size=MICRO_BATCH_SIZE, root=DATA_DIR, process_rank=ddp_rank, world_size=ddp_world_size, prefetch_size=1)
 
-train_ds = MNISTDatasetLoaderLite(train=True, root=DATA_DIR, batch_size=MICRO_BATCH_SIZE, shuffle=True, download=False)
-test_ds = MNISTDatasetLoaderLite(train=False, root=DATA_DIR, batch_size=MICRO_BATCH_SIZE, shuffle=False, download=False)
-# train_ds = CIFAR10DatasetLoaderLite(train=True, root=DATA_DIR, batch_size=MICRO_BATCH_SIZE, shuffle=True, download=False)
-# test_ds = CIFAR10DatasetLoaderLite(train=True, root=DATA_DIR, batch_size=MICRO_BATCH_SIZE, shuffle=False, download=False)
+# train_ds = MNISTDatasetLoaderLite(train=True, root=DATA_DIR, batch_size=MICRO_BATCH_SIZE, shuffle=True, download=False)
+# test_ds = MNISTDatasetLoaderLite(train=False, root=DATA_DIR, batch_size=MICRO_BATCH_SIZE, shuffle=False, download=False)
+train_ds = CIFAR10DatasetLoaderLite(train=True, root=DATA_DIR, batch_size=MICRO_BATCH_SIZE, shuffle=True, download=False)
+test_ds = CIFAR10DatasetLoaderLite(train=True, root=DATA_DIR, batch_size=MICRO_BATCH_SIZE, shuffle=False, download=False)
 
-CODEBOOK_EMBED_DIM = 256
-IN_CHANNELS = 1
+IN_CHANNELS = 3
 
 codebook = Codebook(num_embeddings=NUM_EMBEDDINGS, embedding_dim=CODEBOOK_EMBED_DIM)  # 2048 is the output dim of the encoder
-encoder = Encoder(in_channels=IN_CHANNELS, out_channels=CODEBOOK_EMBED_DIM, m=2, dropout_rate=DROPOUT_RATE)
-generator = Generator(in_channels=CODEBOOK_EMBED_DIM, out_channels=IN_CHANNELS, m=2, dropout_rate=DROPOUT_RATE)
+encoder = Encoder(in_channels=IN_CHANNELS, out_channels=CODEBOOK_EMBED_DIM, m=COMPRESSION_FACTOR, dropout_rate=DROPOUT_RATE)
+generator = Generator(in_channels=CODEBOOK_EMBED_DIM, out_channels=IN_CHANNELS, m=COMPRESSION_FACTOR, dropout_rate=DROPOUT_RATE)
 discriminator = Discriminator(in_channels=IN_CHANNELS, num_filters_last=32, n_layers=2, dropout_rate=DROPOUT_RATE)
 vqgan = VQGAN(encoder, codebook, generator)
 
