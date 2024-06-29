@@ -35,7 +35,7 @@ else:
   ddp_world_size = 1
   DEVICE = 'cpu'
   if torch.cuda.is_available(): DEVICE = 'cuda'
-  if torch.backends.mps.is_available(): DEVICE = 'mps'
+  # if torch.backends.mps.is_available(): DEVICE = 'mps'  # seems to be a bug in MPS. Check W&B vqgan_hyperparam_search project run-2-test-cifar10-31-mps & -cuda
   is_master_process = True
 
 
