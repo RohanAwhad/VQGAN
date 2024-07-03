@@ -288,6 +288,7 @@ def run(config: EngineConfig):
 
     # periodically plot test images
     if step % PLOT_EVERY == 0 and config.is_master_process:
+      MAX_IMAGES_TO_PLOT = 32
 
       with torch.no_grad():
         config.vqgan.eval()
@@ -298,11 +299,12 @@ def run(config: EngineConfig):
       loss = ((img - test_images) ** 2).mean()
       print('Test Loss:', loss.item())
       batch_size, n_channels, img_h, img_w = img.shape
+      batch_size = min(batch_size, MAX_IMAGES_TO_PLOT)
       _n_cols = int(math.sqrt(batch_size)) + 1
 
       img_size = (32, 32)
-      img = F.interpolate(img, img_size).permute(0, 2, 3, 1).detach().cpu().numpy()
-      resized_test_images = F.interpolate(test_images, img_size).permute(0, 2, 3, 1).detach().cpu().numpy()
+      img = F.interpolate(img, img_size).permute(0, 2, 3, 1).detach().cpu().numpy()[:batch_size]
+      resized_test_images = F.interpolate(test_images, img_size).permute(0, 2, 3, 1).detach().cpu().numpy()[:batch_size]
 
       fig, axs = plt.subplots(_n_cols * 2, _n_cols, figsize=(2 * _n_cols, 4 * _n_cols))
       for a in range(_n_cols * 2):
