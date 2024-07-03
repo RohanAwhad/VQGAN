@@ -1,6 +1,3 @@
-from dotenv import load_dotenv
-load_dotenv('/home/rawhad/personal_jobs/VQGAN/dev.env')
-
 import argparse
 import os
 import torch
@@ -60,6 +57,10 @@ argparser.add_argument('--save_model', action='store_true')
 argparser.add_argument('--do_overfit', action='store_true')
 argparser.add_argument('--project_name', type=str, default='vqgan_hyperparam_search')
 argparser.add_argument('--run_name', type=str, default='run-2-test-cifar10-6')
+argparser.add_argument('--precision', choices=['fp32', 'fp16', 'bf16'], default='fp32')
+argparser.add_argument('--optimizer_beta1', type=float, default=0.5)
+argparser.add_argument('--optimizer_beta2', type=float, default=0.9)
+argparser.add_argument('--download_data', action='store_true')
 args = argparser.parse_args()
 
 LR = args.lr
@@ -67,6 +68,8 @@ TOTAL_BATCH_SIZE = args.batch_size
 MICRO_BATCH_SIZE = args.micro_batch_size if args.micro_batch_size > 0 else TOTAL_BATCH_SIZE
 assert TOTAL_BATCH_SIZE % (MICRO_BATCH_SIZE * ddp_world_size) == 0, "Total batch size must be divisible by (micro batch size * world_size)"
 
+PRECISION = args.precision
+OPTIMIZER_BETAS = (args.optimizer_beta1, args.optimizer_beta2)
 GRAD_ACCUM_STEPS = TOTAL_BATCH_SIZE // (MICRO_BATCH_SIZE * ddp_world_size)
 N_STEPS = args.n_steps
 NUM_EMBEDDINGS = args.num_embeddings
@@ -151,6 +154,8 @@ training_config = engine.EngineConfig(
   logger=LOGGER,
   lr_scheduler=lr_scheduler,
   grad_accum_steps=GRAD_ACCUM_STEPS,
+  precision=PRECISION,
+  optimizer_betas=OPTIMIZER_BETAS,
   checkpoint_every=1000,
   checkpoint_dir=MODEL_DIR,
   last_step=LAST_STEP,

@@ -15,7 +15,7 @@ from lpips import LPIPS
 # ===
 # Configure Optimizer
 # ===
-def configure_optimizer(model, weight_decay, lr, device_type):
+def configure_optimizer(model, weight_decay, lr, device_type, betas):
   # get all parameters that require grad
   params = filter(lambda p: p.requires_grad, model.parameters())
   # create param groups based on ndim
@@ -26,7 +26,7 @@ def configure_optimizer(model, weight_decay, lr, device_type):
   # use fused optimizer if available
   fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
   use_fused = fused_available and device_type == 'cuda'
-  return torch.optim.AdamW(optim_groups, lr=lr, betas=(0.9, 0.95), eps=1e-8, fused=use_fused)
+  return torch.optim.AdamW(optim_groups, lr=lr, betas=betas, eps=1e-8, fused=use_fused)
 
 
 # ===
@@ -101,6 +101,8 @@ class EngineConfig:
   logger: Logger
   lr_scheduler: CosineLRScheduler
   grad_accum_steps: int
+  precision: str
+  optimizer_betas: tuple[float, float]
   checkpoint_every: int
   checkpoint_dir: str
   last_step: int
@@ -187,8 +189,8 @@ def run(config: EngineConfig):
   raw_vqgan = config.vqgan.module if config.is_ddp else config.vqgan
   raw_disc = config.disc.module if config.is_ddp else config.disc
 
-  vqgan_opt = configure_optimizer(raw_vqgan, 0.1, config.lr_scheduler.max_lr, device_type) # lr is placeholder
-  disc_opt = configure_optimizer(raw_disc, 0.1, config.lr_scheduler.max_lr, device_type)
+  vqgan_opt = configure_optimizer(raw_vqgan, 0.1, config.lr_scheduler.max_lr, device_type, config.optimizer_betas) # lr is placeholder
+  disc_opt = configure_optimizer(raw_disc, 0.1, config.lr_scheduler.max_lr, device_type, config.optimizer_betas)
 
   vqgan_opt.zero_grad()
   disc_opt.zero_grad()
@@ -228,11 +230,12 @@ def run(config: EngineConfig):
       # train vqgan
       turn_on_grad(config.vqgan)
       turn_off_grad(config.disc)
-      if device_type == 'cuda':
-        with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
-          gen_loss, commitment_loss, perceptual_reconstruction_loss, lambda_, gan_loss = get_gen_loss(config, images, raw_vqgan, step, perceptual_criterion)
-      else:
+      if config.precision == 'fp32':
         gen_loss, commitment_loss, perceptual_reconstruction_loss, lambda_, gan_loss = get_gen_loss(config, images, raw_vqgan, step, perceptual_criterion)
+      else:
+        dtype = torch.bfloat16 if config.precision == 'bf16' else torch.float16
+        with torch.autocast(device_type=device_type, dtype=dtype):
+          gen_loss, commitment_loss, perceptual_reconstruction_loss, lambda_, gan_loss = get_gen_loss(config, images, raw_vqgan, step, perceptual_criterion)
 
       # if ddp, sync gradients on last micro_step
       if config.is_ddp:
@@ -242,11 +245,12 @@ def run(config: EngineConfig):
       # train discriminator
       turn_off_grad(config.vqgan)
       turn_on_grad(config.disc)
-      if device_type == 'cuda':
-        with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
-          disc_loss = get_disc_loss(config, images, step)
-      else:
+      if config.precision == 'fp32':
         disc_loss = get_disc_loss(config, images, step)
+      else:
+        dtype = torch.bfloat16 if config.precision == 'bf16' else torch.float16
+        with torch.autocast(device_type=device_type, dtype=dtype):
+          disc_loss = get_disc_loss(config, images, step)
       # if ddp, sync gradients on last micro_step
       if config.is_ddp:
         config.disc.require_backward_grad_sync = micro_step == (config.grad_accum_steps - 1)
