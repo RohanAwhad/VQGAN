@@ -117,8 +117,8 @@ if torch.cuda.is_available(): torch.cuda.manual_seed(1234)
 
 # train_ds = MNISTDatasetLoaderLite(train=True, root=DATA_DIR, batch_size=MICRO_BATCH_SIZE, shuffle=True, download=False)
 # test_ds = MNISTDatasetLoaderLite(train=False, root=DATA_DIR, batch_size=MICRO_BATCH_SIZE, shuffle=False, download=False)
-train_ds = CIFAR10DatasetLoaderLite(train=True, root=DATA_DIR, batch_size=MICRO_BATCH_SIZE, shuffle=True, download=False)
-test_ds = CIFAR10DatasetLoaderLite(train=True, root=DATA_DIR, batch_size=MICRO_BATCH_SIZE, shuffle=False, download=False)
+train_ds = CIFAR10DatasetLoaderLite(train=True, root=DATA_DIR, batch_size=MICRO_BATCH_SIZE, shuffle=True, download=args.download_data)
+test_ds = CIFAR10DatasetLoaderLite(train=True, root=DATA_DIR, batch_size=MICRO_BATCH_SIZE, shuffle=False, download=args.download_data)
 
 IN_CHANNELS = 3
 
